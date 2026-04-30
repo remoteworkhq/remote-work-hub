@@ -43,7 +43,8 @@ export async function POST(request: NextRequest) {
           name,
           size: parseInt(size, 10) || 0,
           mtime: ts ? Math.floor(parseFloat(ts) * 1000) : 0,
-          path: `/home/user/workspace/downloads/${name}`,
+          // Agent-visible path. The hub translates back to the real path on read.
+          path: `/workspace/downloads/${name}`,
         };
       });
     return NextResponse.json({ files });

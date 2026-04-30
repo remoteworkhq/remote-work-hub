@@ -79,9 +79,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Translate to agent-visible path. The agent's bwrap chroot mounts
+    // /home/user/workspace AS /workspace, so the agent only sees files under
+    // /workspace/* — telling it to read /home/user/workspace/* fails.
+    const agentPath = `/workspace/uploads/${filename}`;
+
     return NextResponse.json({
       ok: true,
-      path: dest,
+      path: agentPath,
       filename,
       size: file.size,
       type: file.type || "application/octet-stream",

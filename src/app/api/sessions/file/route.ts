@@ -10,15 +10,24 @@ function need(name: string): string {
   return v;
 }
 
-const ALLOWED_PREFIXES = [
-  "/home/user/workspace/downloads/",
-  "/home/user/workspace/uploads/",
-  "/home/user/workspace/project/",
+const ALLOWED_AGENT_PREFIXES = [
+  "/workspace/downloads/",
+  "/workspace/uploads/",
+  "/workspace/project/",
 ];
 
 function isPathAllowed(p: string): boolean {
   if (p.includes("..")) return false;
-  return ALLOWED_PREFIXES.some((pre) => p.startsWith(pre));
+  return ALLOWED_AGENT_PREFIXES.some((pre) => p.startsWith(pre));
+}
+
+// Agent sees /workspace/* (bwrap mount of /home/user/workspace).
+// Server-side exec runs at root level and uses the full /home/user/workspace path.
+function toServerPath(agentPath: string): string {
+  if (agentPath.startsWith("/workspace/")) {
+    return "/home/user/workspace/" + agentPath.slice("/workspace/".length);
+  }
+  return agentPath;
 }
 
 function guessContentType(name: string): string {
@@ -58,10 +67,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "no ready session" }, { status: 409 });
     }
 
+    const serverPath = toServerPath(path);
     const c = new AgentClient({ apiKey: need("API_KEY_21ST") });
     const r = await c.sandboxes.exec({
       sandboxId: session.sandboxId,
-      command: `[ -f '${path}' ] && base64 -w0 '${path}'`,
+      command: `[ -f '${serverPath}' ] && base64 -w0 '${serverPath}'`,
       timeoutMs: 25_000,
     });
     if (r.exitCode !== 0) {
