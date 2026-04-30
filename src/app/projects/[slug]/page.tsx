@@ -3,12 +3,24 @@ import AgentChatClient from "./agent-chat-client";
 
 type PageProps = { params: Promise<{ slug: string }> };
 
-// Slug -> GitHub repo (org/name). Replace with Supabase lookup later.
 const PROJECT_REPOS: Record<string, string> = {
   "test-project": "remoteworkhq/sandbox-test",
 };
 
-const SANDBOX_TIMEOUT_MS = 30 * 60 * 1000; // 30 min idle
+const SANDBOX_TIMEOUT_MS = 30 * 60 * 1000;
+
+function buildRecoveryScript(repo: string, ghToken: string): string {
+  // Inline-quoted bash. Lives only inside the sandbox; never exposed to the browser.
+  return [
+    "#!/bin/bash",
+    "set -e",
+    `git clone "https://x-access-token:${ghToken}@github.com/${repo}.git" /workspace`,
+    `git -C /workspace config user.name "Remote Work Hub Agent"`,
+    `git -C /workspace config user.email "agent@remoteworkhq.local"`,
+    `git -C /workspace remote set-url origin "https://x-access-token:${ghToken}@github.com/${repo}.git"`,
+    `echo "ready" > /workspace/.hub-ready`,
+  ].join("\n");
+}
 
 export default async function ProjectPage({ params }: PageProps) {
   const { slug } = await params;
@@ -28,21 +40,20 @@ export default async function ProjectPage({ params }: PageProps) {
 
   if (!apiKey) return <ErrorState msg="Missing API_KEY_21ST env var. Set it in Vercel and redeploy." />;
   if (!ghToken) return <ErrorState msg="Missing GITHUB_TOKEN env var. Add a PAT with 'repo' scope on remoteworkhq, then redeploy." />;
-  if (!repo) return <ErrorState msg={`No GitHub repo mapped for project "${slug}". Add it to PROJECT_REPOS in src/app/projects/[slug]/page.tsx.`} />;
+  if (!repo) return <ErrorState msg={`No GitHub repo mapped for project "${slug}".`} />;
+
+  const recoveryScript = buildRecoveryScript(repo, ghToken);
 
   const client = new AgentClient({ apiKey });
   const sandbox = await client.sandboxes.create({
     agent: "hub-tester",
     timeoutMs: SANDBOX_TIMEOUT_MS,
-    envs: {
-      GH_TOKEN: ghToken,
-      REPO_SLUG: repo,
+    files: {
+      "/usr/local/bin/init-workspace": recoveryScript,
     },
     setup: [
-      `git clone https://x-access-token:\${GH_TOKEN}@github.com/${repo}.git /workspace`,
-      `git -C /workspace config user.name "Remote Work Hub Agent"`,
-      `git -C /workspace config user.email "agent@remoteworkhq.local"`,
-      `git -C /workspace remote set-url origin https://x-access-token:\${GH_TOKEN}@github.com/${repo}.git`,
+      "chmod +x /usr/local/bin/init-workspace",
+      "/usr/local/bin/init-workspace",
     ],
   });
 

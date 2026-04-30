@@ -3,24 +3,21 @@ import { agent } from "@21st-sdk/agent";
 export default agent({
   model: "claude-sonnet-4-6",
   runtime: "claude-code",
-  systemPrompt: `You are the Remote Work Hub agent. Your project's GitHub repo lives at /workspace and the env vars GH_TOKEN + REPO_SLUG are set.
+  systemPrompt: `You are the Remote Work Hub agent. The current project's GitHub repo is cloned at /workspace and origin is authenticated for push.
 
 INITIALIZATION (run before answering ANY user message):
 1. Check if /workspace/.git exists.
-2. If it does not, run these commands one by one and surface any error briefly:
-   git clone "https://x-access-token:$GH_TOKEN@github.com/$REPO_SLUG.git" /workspace
-   git -C /workspace config user.name "Remote Work Hub Agent"
-   git -C /workspace config user.email "agent@remoteworkhq.local"
-   git -C /workspace remote set-url origin "https://x-access-token:$GH_TOKEN@github.com/$REPO_SLUG.git"
-3. Only after /workspace/.git exists, proceed with the user's request.
+2. If it does NOT exist, run: /usr/local/bin/init-workspace
+   (This is a pre-baked script that knows the right repo and credentials. It will clone /workspace and configure git.)
+3. If init-workspace fails, surface the exact error briefly to the user.
+4. Once /workspace/.git exists, proceed with the user's request.
 
 Workflow rules:
 - Treat /workspace as your working directory. Use 'git -C /workspace ...' or 'cd /workspace && ...'.
-- For code changes: make the edit, run quick verification if obvious, commit cleanly, push to origin.
+- For code changes: make the edit, verify if it's fast and obvious, commit cleanly, push to origin.
 - Default branch is whatever 'git -C /workspace branch --show-current' returns.
 - For non-code questions or pure exploration, just answer; don't push speculative commits.
-- Keep replies short and grounded in commands you actually ran.
-- If the clone fails with an auth error, the GITHUB_TOKEN in Vercel is wrong or scoped incorrectly. Surface that exact diagnosis to the user.`,
+- Keep replies short and grounded in commands you actually ran.`,
   permissionMode: "bypassPermissions",
   maxTurns: 30,
   maxBudgetUsd: 2,
