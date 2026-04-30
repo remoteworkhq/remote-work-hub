@@ -282,7 +282,8 @@ export default function AgentChatClient({
   const [pushing, setPushing] = useState(false);
   const [pushResult, setPushResult] = useState<PushResult | null>(null);
   const [autoPush, setAutoPush] = useState(true);
-  const [input, setInput] = useState("");
+  const draftKey = `rwh.draft.${slug}`;
+  const [input, setInput] = useState<string>("");
   const [inputFocused, setInputFocused] = useState(false);
   const lastAutoPushedAtRef = useRef<number>(0);
   const prevStatusRef = useRef<string>("ready");
@@ -305,6 +306,22 @@ export default function AgentChatClient({
     { chat },
   );
   const [hydrated, setHydrated] = useState(false);
+
+  // Restore input draft on mount (per-slug). Survives nav / session death.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(draftKey);
+      if (saved) setInput(saved);
+    } catch {}
+  }, [draftKey]);
+
+  // Persist draft on every change. Empty string clears it.
+  useEffect(() => {
+    try {
+      if (input) localStorage.setItem(draftKey, input);
+      else localStorage.removeItem(draftKey);
+    } catch {}
+  }, [input, draftKey]);
 
   // Auto-scroll
   useEffect(() => {
@@ -389,6 +406,21 @@ export default function AgentChatClient({
     [slug],
   );
 
+  // Persist transcript on every turn end so chat survives sandbox death.
+  // Fires whenever messages.length grows after streaming completes.
+  const lastPersistedLengthRef = useRef(0);
+  useEffect(() => {
+    if (status !== "ready") return;
+    if (messages.length === 0) return;
+    if (messages.length === lastPersistedLengthRef.current) return;
+    lastPersistedLengthRef.current = messages.length;
+    void fetch("/api/sessions/transcript", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug, messages }),
+    }).catch(() => {});
+  }, [status, messages, slug]);
+
   // Auto-push only when last reply mentioned repo work
   useEffect(() => {
     const prev = prevStatusRef.current;
@@ -438,6 +470,9 @@ export default function AgentChatClient({
     if (!text || status === "streaming" || status === "submitted") return;
     void sendMessage({ text });
     setInput("");
+    try {
+      localStorage.removeItem(draftKey);
+    } catch {}
     adjust(true);
   };
 

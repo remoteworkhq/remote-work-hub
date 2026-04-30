@@ -193,18 +193,61 @@ export type StoredMessage = {
 
 export async function getThreadMessages(slug: string): Promise<StoredMessage[]> {
   const session = await getActiveSession(slug);
-  if (!session || !session.threadId) return [];
-  try {
-    const thread = await client().threads.get({
-      sandboxId: session.sandboxId,
-      threadId: session.threadId,
-    });
-    const raw = thread.messages;
-    if (!Array.isArray(raw)) return [];
-    return raw as StoredMessage[];
-  } catch {
-    return [];
+  if (session?.threadId) {
+    try {
+      const thread = await client().threads.get({
+        sandboxId: session.sandboxId,
+        threadId: session.threadId,
+      });
+      const raw = thread.messages;
+      if (Array.isArray(raw) && raw.length > 0) return raw as StoredMessage[];
+    } catch {
+      // fall through to transcript fallback
+    }
   }
+  // Fallback: most recent persisted transcript for this slug, regardless of
+  // session status. Survives sandbox death / 21st thread reap.
+  return getLatestTranscript(slug);
+}
+
+export async function getLatestTranscript(slug: string): Promise<StoredMessage[]> {
+  const supabase = getAdminClient();
+  const { data } = await supabase
+    .from("sessions")
+    .select("transcript, started_at")
+    .eq("project_slug", slug)
+    .not("transcript", "is", null)
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const t = data?.transcript;
+  if (!Array.isArray(t)) return [];
+  return t as StoredMessage[];
+}
+
+export async function persistTranscript(
+  slug: string,
+  messages: StoredMessage[],
+): Promise<void> {
+  if (!Array.isArray(messages)) return;
+  const supabase = getAdminClient();
+  // Save against the most recent session for this slug (active or dead).
+  // Multi-tab: same session row, last writer wins, fine for our use.
+  const { data: row } = await supabase
+    .from("sessions")
+    .select("id")
+    .eq("project_slug", slug)
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!row?.id) return;
+  await supabase
+    .from("sessions")
+    .update({
+      transcript: messages,
+      last_active_at: new Date().toISOString(),
+    })
+    .eq("id", row.id);
 }
 
 // Phase 2: check if the workspace marker exists. Updates DB to ready if so.
