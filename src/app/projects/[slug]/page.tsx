@@ -3,30 +3,59 @@ import AgentChatClient from "./agent-chat-client";
 
 type PageProps = { params: Promise<{ slug: string }> };
 
+// Slug -> GitHub repo (org/name). Replace with Supabase lookup later.
+const PROJECT_REPOS: Record<string, string> = {
+  "test-project": "remoteworkhq/sandbox-test",
+};
+
+const SANDBOX_TIMEOUT_MS = 30 * 60 * 1000; // 30 min idle
+
 export default async function ProjectPage({ params }: PageProps) {
   const { slug } = await params;
-
   const apiKey = process.env.API_KEY_21ST;
-  if (!apiKey) {
+  const ghToken = process.env.GITHUB_TOKEN;
+  const repo = PROJECT_REPOS[slug];
+
+  function ErrorState({ msg }: { msg: string }) {
     return (
       <main className="min-h-dvh px-6 py-16 max-w-4xl mx-auto">
         <a href="/" className="text-sm text-zinc-500 hover:text-zinc-300">&larr; Back</a>
         <h1 className="mt-4 text-3xl font-semibold tracking-tight">{slug}</h1>
-        <p className="mt-4 text-red-400 text-sm">
-          Missing <code>API_KEY_21ST</code> env var. Set it in Vercel and redeploy.
-        </p>
+        <p className="mt-4 text-sm text-red-400">{msg}</p>
       </main>
     );
   }
 
+  if (!apiKey) return <ErrorState msg="Missing API_KEY_21ST env var. Set it in Vercel and redeploy." />;
+  if (!ghToken) return <ErrorState msg="Missing GITHUB_TOKEN env var. Add a PAT with 'repo' scope on remoteworkhq, then redeploy." />;
+  if (!repo) return <ErrorState msg={`No GitHub repo mapped for project "${slug}". Add it to PROJECT_REPOS in src/app/projects/[slug]/page.tsx.`} />;
+
   const client = new AgentClient({ apiKey });
-  const sandbox = await client.sandboxes.create({ agent: "hub-tester" });
+  const sandbox = await client.sandboxes.create({
+    agent: "hub-tester",
+    timeoutMs: SANDBOX_TIMEOUT_MS,
+    envs: {
+      GH_TOKEN: ghToken,
+      REPO_SLUG: repo,
+    },
+    setup: [
+      `git clone https://x-access-token:\${GH_TOKEN}@github.com/${repo}.git /workspace`,
+      `git -C /workspace config user.name "Remote Work Hub Agent"`,
+      `git -C /workspace config user.email "agent@remoteworkhq.local"`,
+      `git -C /workspace remote set-url origin https://x-access-token:\${GH_TOKEN}@github.com/${repo}.git`,
+    ],
+  });
 
   return (
     <main className="min-h-dvh px-6 py-10 max-w-4xl mx-auto">
       <a href="/" className="text-sm text-zinc-500 hover:text-zinc-300">&larr; Back</a>
       <header className="mt-3 mb-6 flex items-baseline justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">{slug}</h1>
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{slug}</h1>
+          <p className="text-xs text-zinc-500 mt-1">
+            <a className="hover:text-zinc-300" href={`https://github.com/${repo}`} target="_blank" rel="noreferrer">{repo}</a>
+          </p>
+        </div>
         <span className="text-xs text-zinc-500 font-mono">{sandbox.id}</span>
       </header>
       <AgentChatClient sandboxId={sandbox.id} />
