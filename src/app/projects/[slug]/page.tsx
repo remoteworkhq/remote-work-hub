@@ -10,6 +10,10 @@ const PROJECT_REPOS: Record<string, string> = {
 const SANDBOX_TIMEOUT_MS = 30 * 60 * 1000;
 const SETUP_WAIT_SECONDS = 30;
 
+// Agent's runtime cwd is /home/user/workspace (per 21st docs).
+// Clone the project into a stable subdir there so the agent's `./project` lookup always works.
+const PROJECT_PATH = "/home/user/workspace/project";
+
 export default async function ProjectPage({ params }: PageProps) {
   const { slug } = await params;
   const apiKey = process.env.API_KEY_21ST;
@@ -35,23 +39,23 @@ export default async function ProjectPage({ params }: PageProps) {
     agent: "hub-tester",
     timeoutMs: SANDBOX_TIMEOUT_MS,
     setup: [
-      `git clone "https://x-access-token:${ghToken}@github.com/${repo}.git" /workspace`,
-      `git -C /workspace config user.name "Remote Work Hub Agent"`,
-      `git -C /workspace config user.email "agent@remoteworkhq.local"`,
-      `git -C /workspace remote set-url origin "https://x-access-token:${ghToken}@github.com/${repo}.git"`,
-      `touch /workspace/.hub-ready`,
+      `mkdir -p /home/user/workspace`,
+      `git clone "https://x-access-token:${ghToken}@github.com/${repo}.git" ${PROJECT_PATH}`,
+      `git -C ${PROJECT_PATH} config user.name "Remote Work Hub Agent"`,
+      `git -C ${PROJECT_PATH} config user.email "agent@remoteworkhq.local"`,
+      `git -C ${PROJECT_PATH} remote set-url origin "https://x-access-token:${ghToken}@github.com/${repo}.git"`,
+      `touch ${PROJECT_PATH}/.hub-ready`,
     ],
   });
 
-  // Block until setup signals ready (clone done + git configured), then render.
   const wait = await client.sandboxes.exec({
     sandboxId: sandbox.id,
-    command: `for i in $(seq 1 ${SETUP_WAIT_SECONDS}); do [ -f /workspace/.hub-ready ] && echo ready && exit 0; sleep 1; done; echo timeout && exit 1`,
+    command: `for i in $(seq 1 ${SETUP_WAIT_SECONDS}); do [ -f ${PROJECT_PATH}/.hub-ready ] && echo ready && exit 0; sleep 1; done; echo timeout && exit 1`,
   });
   if (wait.exitCode !== 0) {
     return (
       <ErrorState
-        msg={`Sandbox setup timed out (${SETUP_WAIT_SECONDS}s). Likely cause: GITHUB_TOKEN is invalid or lacks 'repo' scope on remoteworkhq. Check Vercel env vars and rotate the token if needed.`}
+        msg={`Sandbox setup timed out (${SETUP_WAIT_SECONDS}s). Likely cause: GITHUB_TOKEN is invalid or lacks 'repo' scope on remoteworkhq. Rotate the token in Vercel and redeploy.`}
       />
     );
   }
