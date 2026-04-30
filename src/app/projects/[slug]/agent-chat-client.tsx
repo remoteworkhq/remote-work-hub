@@ -500,26 +500,43 @@ export default function AgentChatClient({
     return () => clearTimeout(timer);
   }, [messages, status, slug]);
 
-  // On unmount (SPA nav, tab close, refresh), fire a sendBeacon snapshot so
-  // we never lose content because the debounce hadn't elapsed yet.
-  // Also writes the latest merged view to localStorage one more time.
+  // On unmount (SPA nav, tab close, refresh): persist current state, AND if
+  // the agent was mid-stream, fire a server-side finalize watcher that polls
+  // the 21st thread until completion, captures the full reply, and saves it
+  // to the transcript.
   const messagesForUnmountRef = useRef(messages);
+  const statusForUnmountRef = useRef(status);
   useEffect(() => {
     messagesForUnmountRef.current = messages;
   }, [messages]);
   useEffect(() => {
+    statusForUnmountRef.current = status;
+  }, [status]);
+  useEffect(() => {
     return () => {
       const m = messagesForUnmountRef.current;
-      if (!m || m.length === 0) return;
-      try {
-        localStorage.setItem(messagesKey, JSON.stringify(m));
-      } catch {}
-      try {
-        const blob = new Blob([JSON.stringify({ slug, messages: m })], {
-          type: "application/json",
-        });
-        navigator.sendBeacon?.("/api/sessions/transcript", blob);
-      } catch {}
+      const s = statusForUnmountRef.current;
+      if (m && m.length > 0) {
+        try {
+          localStorage.setItem(messagesKey, JSON.stringify(m));
+        } catch {}
+        try {
+          const blob = new Blob([JSON.stringify({ slug, messages: m })], {
+            type: "application/json",
+          });
+          navigator.sendBeacon?.("/api/sessions/transcript", blob);
+        } catch {}
+      }
+      if (s === "streaming" || s === "submitted") {
+        // Server-side watcher polls thread until completion + persists transcript.
+        // keepalive lets the fetch survive unmount.
+        try {
+          fetch(`/api/sessions/finalize?slug=${encodeURIComponent(slug)}`, {
+            method: "POST",
+            keepalive: true,
+          }).catch(() => {});
+        } catch {}
+      }
     };
   }, [slug, messagesKey]);
 
