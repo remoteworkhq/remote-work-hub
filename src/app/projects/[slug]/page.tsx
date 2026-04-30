@@ -12,8 +12,6 @@ const SETUP_WAIT_SECONDS = 30;
 const PROJECT_PATH = "/home/user/workspace/project";
 const READY_PATH = `${PROJECT_PATH}/.hub-ready`;
 
-// Restrict sandbox outbound to GitHub only — bypasses 21st vault proxy substitution
-// so the real PAT in the remote URL flows through to github.com unchanged.
 const NETWORK_ALLOW = ["github.com", "*.github.com", "objects.githubusercontent.com", "codeload.github.com"];
 const NETWORK_DENY = ["0.0.0.0/0"];
 
@@ -51,9 +49,12 @@ export default async function ProjectPage({ params }: PageProps) {
     setup: [
       `mkdir -p /home/user/workspace`,
       `git clone ${remoteUrl} ${PROJECT_PATH}`,
+      `chmod -R a+rw ${PROJECT_PATH}`,
       `git -C ${PROJECT_PATH} config user.name "Remote Work Hub Agent"`,
       `git -C ${PROJECT_PATH} config user.email "agent@remoteworkhq.local"`,
       `git -C ${PROJECT_PATH} remote set-url origin ${remoteUrl}`,
+      // Make the repo trusted regardless of which uid runs git later (setup vs sandboxes.exec)
+      `git config --system --add safe.directory '*' || git config --global --add safe.directory '*'`,
       `touch ${READY_PATH}`,
     ],
   });
