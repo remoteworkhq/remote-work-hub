@@ -24,6 +24,7 @@ export type Session = {
   status: string;
   createdAt: string;
   lastActiveAt: string;
+  lastResponseAt: string | null;
 };
 
 function need(name: string): string {
@@ -71,6 +72,7 @@ function rowToSession(row: {
   status: string;
   started_at: string;
   last_active_at: string;
+  last_response_at?: string | null;
 }): Session | null {
   if (!row.project_slug || !row.sandbox_id || !row.repo) return null;
   return {
@@ -82,6 +84,7 @@ function rowToSession(row: {
     status: row.status,
     createdAt: row.started_at,
     lastActiveAt: row.last_active_at,
+    lastResponseAt: row.last_response_at ?? null,
   };
 }
 
@@ -273,11 +276,10 @@ export async function getLatestTranscript(slug: string): Promise<StoredMessage[]
 export async function persistTranscript(
   slug: string,
   messages: StoredMessage[],
+  opts: { markResponseComplete?: boolean } = {},
 ): Promise<void> {
   if (!Array.isArray(messages)) return;
   const supabase = getAdminClient();
-  // Save against the most recent session for this slug (active or dead).
-  // Multi-tab: same session row, last writer wins, fine for our use.
   const { data: row } = await supabase
     .from("sessions")
     .select("id")
@@ -286,13 +288,15 @@ export async function persistTranscript(
     .limit(1)
     .maybeSingle();
   if (!row?.id) return;
-  await supabase
-    .from("sessions")
-    .update({
-      transcript: messages,
-      last_active_at: new Date().toISOString(),
-    })
-    .eq("id", row.id);
+  const now = new Date().toISOString();
+  const update: Record<string, unknown> = {
+    transcript: messages,
+    last_active_at: now,
+  };
+  if (opts.markResponseComplete) {
+    update.last_response_at = now;
+  }
+  await supabase.from("sessions").update(update).eq("id", row.id);
 }
 
 // Phase 2: check if the workspace marker exists. Updates DB to ready if so.

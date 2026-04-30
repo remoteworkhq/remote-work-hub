@@ -10,6 +10,7 @@ import {
 } from "react";
 
 export type Session = {
+  id: string;
   slug: string;
   sandboxId: string;
   threadId: string | null;
@@ -17,6 +18,7 @@ export type Session = {
   status: string;
   createdAt: string;
   lastActiveAt: string;
+  lastResponseAt: string | null;
 };
 
 type SpawnState = "idle" | "spawning" | "preparing" | "ready" | "error";

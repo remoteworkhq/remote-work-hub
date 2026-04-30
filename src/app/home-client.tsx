@@ -42,9 +42,11 @@ export default function HomeClient({ projects }: { projects: ProjectMeta[] }) {
     return map;
   }, [sessions]);
 
-  function isFresh(iso: string | undefined): boolean {
-    if (!iso) return false;
-    return now - new Date(iso).getTime() < FRESH_WINDOW_MS;
+  // Use lastResponseAt (only updated on streaming→ready) so the badge fires
+  // strictly when the agent finishes — not during streaming.
+  function isFresh(s: { lastResponseAt: string | null } | undefined): boolean {
+    if (!s?.lastResponseAt) return false;
+    return now - new Date(s.lastResponseAt).getTime() < FRESH_WINDOW_MS;
   }
 
   const handleEnd = async (slug: string) => {
@@ -166,7 +168,7 @@ export default function HomeClient({ projects }: { projects: ProjectMeta[] }) {
           {projects.map((p, idx) => {
             const session = sessionBySlug[p.slug];
             const live = !!session;
-            const fresh = isFresh(session?.lastActiveAt);
+            const fresh = isFresh(session);
             return (
               <Link
                 key={p.slug}

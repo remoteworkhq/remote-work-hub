@@ -336,9 +336,21 @@ export default function AgentChatClient({
 
   const { messages: liveMessages, status, stop, error, sendMessage } =
     useChat({ chat });
-  const [historical, setHistorical] = useState<UIMessage[]>([]);
-  const [hydrated, setHydrated] = useState(false);
   const messagesKey = `rwh.msgs.${slug}`;
+  // Synchronous initial state from localStorage — eliminates the post-mount
+  // flash where the chat briefly looks empty before the restore effect runs.
+  const [historical, setHistorical] = useState<UIMessage[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const saved = localStorage.getItem(messagesKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed as UIMessage[];
+      }
+    } catch {}
+    return [];
+  });
+  const [hydrated, setHydrated] = useState(false);
 
   // Restore input draft on mount (per-slug). Survives nav / session death.
   useEffect(() => {
@@ -355,23 +367,6 @@ export default function AgentChatClient({
       else localStorage.removeItem(draftKey);
     } catch {}
   }, [input, draftKey]);
-
-  // INSTANT restore from localStorage (synchronous, no network).
-  // Runs before async server hydration, so the user sees the previous
-  // chat the moment the page loads.
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(messagesKey);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setHistorical(parsed as UIMessage[]);
-        }
-      }
-    } catch {}
-    // intentionally only on slug change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messagesKey]);
 
   // Merged view: historical + live, dedupe by id AND first-50-chars-of-text
   // (in case ids differ between sources for the same logical message).
@@ -495,8 +490,8 @@ export default function AgentChatClient({
     })();
   }, [status, messages.length, slug]);
 
-  // Persist transcript continuously, debounced 300ms. Captures the user's
-  // message immediately on send and each agent stream chunk while streaming.
+  // Persist transcript continuously (300ms debounce). Captures user message on
+  // send + agent's evolving stream state.
   useEffect(() => {
     if (messages.length === 0) return;
     const timer = setTimeout(() => {
@@ -507,7 +502,23 @@ export default function AgentChatClient({
       }).catch(() => {});
     }, 300);
     return () => clearTimeout(timer);
-  }, [messages, status, slug]);
+  }, [messages, slug]);
+
+  // Mark response COMPLETE (separate from regular activity) only when the
+  // agent finishes a turn. Hub uses this for the green badge so it never
+  // fires mid-stream.
+  const prevTurnStatusRef = useRef<string>("ready");
+  useEffect(() => {
+    const prev = prevTurnStatusRef.current;
+    prevTurnStatusRef.current = status;
+    if (prev === "streaming" && status === "ready" && messages.length > 0) {
+      void fetch("/api/sessions/transcript", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug, messages, final: true }),
+      }).catch(() => {});
+    }
+  }, [status, messages, slug]);
 
   // On unmount (SPA nav, tab close, refresh): persist current state, AND if
   // the agent was mid-stream, fire a server-side finalize watcher that polls

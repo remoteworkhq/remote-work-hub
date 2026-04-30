@@ -14,7 +14,8 @@ export async function POST(request: NextRequest) {
     if (!Array.isArray(messages)) {
       return NextResponse.json({ error: "messages array required" }, { status: 400 });
     }
-    await persistTranscript(slug, messages);
+    const final = body?.final === true;
+    await persistTranscript(slug, messages, { markResponseComplete: final });
     return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json(
