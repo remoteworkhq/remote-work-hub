@@ -16,8 +16,10 @@ export default function ProjectShell({
   const state = spawnStates[slug];
   const error = errors[slug];
 
+  // Only auto-spawn on first visit (no state recorded yet). Don't retry on
+  // error — that would loop forever and hide the error message.
   useEffect(() => {
-    if (!session && state !== "spawning" && state !== "preparing") {
+    if (!session && state === undefined) {
       void getOrCreate(slug).catch(() => {});
     }
   }, [slug, session, state, getOrCreate]);

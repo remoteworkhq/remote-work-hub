@@ -57,10 +57,10 @@ function saveCached(sessions: Session[]) {
 }
 
 async function pollUntilReady(slug: string, signal: AbortSignal): Promise<Session> {
-  // Poll /api/sessions/check up to ~45s
-  for (let i = 0; i < 22; i++) {
+  // Poll fast (every ~1s) for ~40s total
+  for (let i = 0; i < 35; i++) {
     if (signal.aborted) throw new Error("cancelled");
-    await new Promise((r) => setTimeout(r, i === 0 ? 500 : 2000));
+    await new Promise((r) => setTimeout(r, i === 0 ? 300 : 1000));
     if (signal.aborted) throw new Error("cancelled");
     const r = await fetch("/api/sessions/check", {
       method: "POST",
@@ -76,7 +76,7 @@ async function pollUntilReady(slug: string, signal: AbortSignal): Promise<Sessio
       throw new Error("Session disappeared during spawn");
     }
   }
-  throw new Error("Spawn timed out waiting for workspace clone (45s)");
+  throw new Error("Spawn timed out waiting for workspace clone (40s)");
 }
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {

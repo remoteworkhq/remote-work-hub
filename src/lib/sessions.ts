@@ -42,7 +42,8 @@ function buildRemoteUrl(repo: string, ghToken: string): string {
 function buildSetup(remoteUrl: string): string[] {
   return [
     `mkdir -p /home/user/workspace`,
-    `git clone ${remoteUrl} ${PROJECT_PATH}`,
+    // --depth 1 = ~3x faster clone for sandbox use; we don't need deep history.
+    `git clone --depth 1 ${remoteUrl} ${PROJECT_PATH}`,
     `chmod -R a+rw ${PROJECT_PATH}`,
     `git -C ${PROJECT_PATH} config user.name "Remote Work Hub Agent"`,
     `git -C ${PROJECT_PATH} config user.email "agent@remoteworkhq.local"`,
