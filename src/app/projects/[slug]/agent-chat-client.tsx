@@ -2,7 +2,16 @@
 import { createAgentChat } from "@21st-sdk/nextjs";
 import { useChat } from "@ai-sdk/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowUp, Loader2, Square } from "lucide-react";
+import {
+  ArrowUp,
+  Download,
+  FileText,
+  ImageIcon,
+  Loader2,
+  Paperclip,
+  Square,
+  X,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -16,6 +25,28 @@ import { useSessions } from "@/components/session-provider";
 import { cn } from "@/lib/utils";
 
 type PushResult = { exitCode: number; stdout: string; stderr: string };
+
+type Attachment = {
+  filename: string;
+  path: string;
+  size: number;
+  type: string;
+};
+
+type DownloadFile = {
+  name: string;
+  size: number;
+  mtime: number;
+  path: string;
+};
+
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
+
+function fmtSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 type Props = {
   sandboxId: string;
@@ -282,6 +313,10 @@ export default function AgentChatClient({
   const draftKey = `rwh.draft.${slug}`;
   const [input, setInput] = useState<string>("");
   const [inputFocused, setInputFocused] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [downloads, setDownloads] = useState<DownloadFile[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const lastAutoPushedAtRef = useRef<number>(0);
   const prevStatusRef = useRef<string>("ready");
   const recordedThreadIdRef = useRef<string | null>(threadId);
@@ -396,6 +431,23 @@ export default function AgentChatClient({
     [slug],
   );
 
+  // After each agent turn, list any new downloads the agent placed in /home/user/downloads/
+  useEffect(() => {
+    if (status !== "ready") return;
+    void (async () => {
+      try {
+        const r = await fetch("/api/sessions/downloads", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slug }),
+        });
+        if (!r.ok) return;
+        const data = (await r.json()) as { files?: DownloadFile[] };
+        setDownloads(data.files ?? []);
+      } catch {}
+    })();
+  }, [status, messages.length, slug]);
+
   // Persist transcript on every turn end so chat survives sandbox death.
   // Fires whenever messages.length grows after streaming completes.
   const lastPersistedLengthRef = useRef(0);
@@ -457,15 +509,69 @@ export default function AgentChatClient({
 
   const submit = () => {
     const text = input.trim();
-    if (!text || status === "streaming" || status === "submitted" || !hydrated)
-      return;
-    void sendMessage({ text });
+    if (!text && attachments.length === 0) return;
+    if (status === "streaming" || status === "submitted" || !hydrated) return;
+    let payload = text;
+    if (attachments.length > 0) {
+      const list = attachments
+        .map(
+          (a) =>
+            `- ${a.filename} (${fmtSize(a.size)}, ${a.type}) at ${a.path}`,
+        )
+        .join("\n");
+      payload = `Attached files (already uploaded to the sandbox):\n${list}\n\n${text}`.trim();
+    }
+    void sendMessage({ text: payload });
     setInput("");
+    setAttachments([]);
     try {
       localStorage.removeItem(draftKey);
     } catch {}
     adjust(true);
   };
+
+  const handleAttachClick = () => fileInputRef.current?.click();
+
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (e.target) e.target.value = "";
+    if (files.length === 0) return;
+    setUploading(true);
+    try {
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const r = await fetch(`/api/sessions/upload?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          body: fd,
+        });
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          alert(`Upload failed: ${d.error || r.statusText}`);
+          continue;
+        }
+        const data = (await r.json()) as Attachment & { ok: boolean };
+        setAttachments((prev) => [
+          ...prev,
+          {
+            filename: data.filename,
+            path: data.path,
+            size: data.size,
+            type: data.type,
+          },
+        ]);
+      }
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const removeAttachment = (path: string) => {
+    setAttachments((prev) => prev.filter((a) => a.path !== path));
+  };
+
+  const fileUrl = (path: string, inline = false) =>
+    `/api/sessions/file?slug=${encodeURIComponent(slug)}&path=${encodeURIComponent(path)}${inline ? "&inline=1" : ""}`;
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -621,6 +727,47 @@ export default function AgentChatClient({
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {downloads.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="border-b border-rule-soft/60 bg-amber/[0.02] overflow-hidden"
+          >
+            <div className="max-w-[1280px] mx-auto px-6 lg:px-10 py-3 flex items-start gap-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-amber/80 mt-0.5 shrink-0">
+                Downloads
+              </p>
+              <div className="flex-1 flex flex-wrap gap-2">
+                {downloads.map((f) => {
+                  const isImg = IMAGE_EXT.test(f.name);
+                  return (
+                    <a
+                      key={f.path}
+                      href={fileUrl(f.path)}
+                      download={f.name}
+                      className="group flex items-center gap-2 px-3 py-1.5 border border-rule hover:border-amber/60 hover:bg-amber/[0.04] transition-colors"
+                    >
+                      {isImg ? (
+                        <ImageIcon className="w-3.5 h-3.5 text-amber/70" />
+                      ) : (
+                        <FileText className="w-3.5 h-3.5 text-amber/70" />
+                      )}
+                      <span className="text-xs text-paper">{f.name}</span>
+                      <span className="font-mono text-[10px] text-paper-faint">
+                        {fmtSize(f.size)}
+                      </span>
+                      <Download className="w-3 h-3 text-paper-faint group-hover:text-amber transition-colors" />
+                    </a>
+                  );
+                })}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <section ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="max-w-[1280px] mx-auto px-6 lg:px-10 divide-y divide-rule-soft/30">
           {messages.length === 0 && !showThinking && (
@@ -662,13 +809,64 @@ export default function AgentChatClient({
 
       <div className="sticky bottom-0 z-10 border-t border-rule-soft/60 bg-ink/85 backdrop-blur-xl">
         <div className="max-w-[1280px] mx-auto px-6 lg:px-10 py-4">
+          {attachments.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {attachments.map((a) => {
+                const isImg = IMAGE_EXT.test(a.filename);
+                return (
+                  <div
+                    key={a.path}
+                    className="flex items-center gap-2 px-2.5 py-1.5 border border-amber/40 bg-amber/[0.05]"
+                  >
+                    {isImg ? (
+                      <ImageIcon className="w-3.5 h-3.5 text-amber" />
+                    ) : (
+                      <FileText className="w-3.5 h-3.5 text-amber" />
+                    )}
+                    <span className="text-xs text-paper">{a.filename}</span>
+                    <span className="font-mono text-[10px] text-paper-faint">
+                      {fmtSize(a.size)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(a.path)}
+                      className="text-paper-faint hover:text-rose-soft"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div
             className={cn(
               "flex items-end gap-3 border bg-ink-2/40 transition-colors",
               inputFocused ? "border-amber/40" : "border-rule",
             )}
           >
-            <div className="font-mono text-amber/80 text-sm pl-4 pt-4 select-none">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={handleFileSelected}
+            />
+            <button
+              type="button"
+              onClick={handleAttachClick}
+              disabled={uploading || !hydrated}
+              title="Attach files (uploaded into the sandbox; agent can read them)"
+              className="pl-3 pt-3.5 text-paper-faint hover:text-amber transition-colors disabled:opacity-40"
+            >
+              {uploading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Paperclip className="w-4 h-4" />
+              )}
+            </button>
+            <div className="font-mono text-amber/80 text-sm pt-4 select-none">
               ›
             </div>
             <textarea

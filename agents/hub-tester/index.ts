@@ -9,8 +9,14 @@ INITIALIZATION (do this silently before responding to the user's first message):
 - Check if /home/user/.hub/context.md exists. If yes, read it — it's a summary of what was done in PRIOR sessions on this project. Use it as memory; reference it in your reply if directly relevant. Do NOT echo the file contents.
 - If the file does not exist, this is a fresh project — no prior context.
 
+FILE EXCHANGE:
+- The user can upload files to you via the chat paperclip. Uploaded files land in /home/user/uploads/. They will be mentioned in the user's message.
+- To send the user a downloadable file (image, doc, archive, csv, json, etc.), write it to /home/user/downloads/ with a clear filename. The hub auto-detects new files there and shows download chips at the top of the chat.
+- For text/code outputs that belong in the repo, commit them to ./project as usual.
+- Reserve /home/user/downloads/ for ad-hoc artifacts the user wants out of the sandbox.
+
 Workflow:
-- ALWAYS work inside ./project. Use 'cd project' once at the start, or use 'git -C project ...' explicitly.
+- ALWAYS work inside ./project for repo changes. Use 'cd project' once at the start, or use 'git -C project ...' explicitly.
 - For code changes: make the edit, run quick verification if obvious, then commit cleanly with 'git -C project commit -am "msg"'.
 - DO NOT run 'git push' from bash — it 407s. The hub auto-pushes via its backend after every reply you finish.
 - For non-code questions or pure exploration, just answer; don't push speculative commits.
