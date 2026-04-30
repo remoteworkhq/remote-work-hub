@@ -12,6 +12,8 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
   const [pushing, setPushing] = useState(false);
   const [pushResult, setPushResult] = useState<PushResult | null>(null);
   const closedRef = useRef(false);
+  const lastAutoPushedAtRef = useRef<number>(0);
+  const prevStatusRef = useRef<string>("ready");
 
   const chat = useMemo(
     () =>
@@ -25,6 +27,7 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
 
   const { messages, status, stop, error, sendMessage } = useChat({ chat });
 
+  // Sandbox cleanup on unmount/close
   useEffect(() => {
     const beacon = () => {
       if (closedRef.current) return;
@@ -40,6 +43,48 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
     };
   }, [sandboxId]);
 
+  const runPush = async (auto: boolean): Promise<PushResult> => {
+    setPushing(true);
+    if (!auto) setPushResult(null);
+    try {
+      const r = await fetch(`/api/push-sandbox?id=${sandboxId}`, { method: "POST" });
+      const data = (await r.json()) as PushResult | { error: string };
+      const result: PushResult =
+        "error" in data
+          ? { exitCode: -1, stdout: "", stderr: data.error }
+          : data;
+      const isNoop =
+        result.exitCode === 0 && /Everything up-to-date/i.test(result.stdout + result.stderr);
+      if (!auto || !isNoop) {
+        setPushResult(result);
+      }
+      return result;
+    } catch (e) {
+      const result: PushResult = {
+        exitCode: -1,
+        stdout: "",
+        stderr: e instanceof Error ? e.message : "fetch failed",
+      };
+      setPushResult(result);
+      return result;
+    } finally {
+      setPushing(false);
+    }
+  };
+
+  // Auto-push when agent finishes a turn (status: streaming -> ready)
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (prev === "streaming" && status === "ready" && messages.length > 0) {
+      const now = Date.now();
+      if (now - lastAutoPushedAtRef.current > 2000) {
+        lastAutoPushedAtRef.current = now;
+        void runPush(true);
+      }
+    }
+  }, [status, messages.length]);
+
   const handleEnd = async () => {
     if (closedRef.current) {
       router.push("/");
@@ -53,28 +98,6 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
     router.push("/");
   };
 
-  const handlePush = async () => {
-    setPushing(true);
-    setPushResult(null);
-    try {
-      const r = await fetch(`/api/push-sandbox?id=${sandboxId}`, { method: "POST" });
-      const data = (await r.json()) as PushResult | { error: string };
-      if ("error" in data) {
-        setPushResult({ exitCode: -1, stdout: "", stderr: data.error });
-      } else {
-        setPushResult(data);
-      }
-    } catch (e) {
-      setPushResult({
-        exitCode: -1,
-        stdout: "",
-        stderr: e instanceof Error ? e.message : "fetch failed",
-      });
-    } finally {
-      setPushing(false);
-    }
-  };
-
   const pushOk = pushResult?.exitCode === 0;
 
   return (
@@ -82,9 +105,10 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
       <div className="flex justify-between items-center mb-3 gap-2">
         <button
           type="button"
-          onClick={handlePush}
+          onClick={() => runPush(false)}
           disabled={pushing}
           className="text-sm rounded-md bg-zinc-100 text-zinc-900 px-3 py-1.5 font-medium hover:bg-white transition disabled:opacity-50"
+          title="Manually trigger a push (auto-push runs after each agent turn)"
         >
           {pushing ? "Pushing..." : "Push to GitHub"}
         </button>
