@@ -16,6 +16,7 @@ const NETWORK_ALLOW = [
 const NETWORK_DENY = ["0.0.0.0/0"];
 
 export type Session = {
+  id: string;
   slug: string;
   sandboxId: string;
   threadId: string | null;
@@ -62,6 +63,7 @@ function buildSetup(remoteUrl: string, priorLog: string | null): string[] {
 }
 
 function rowToSession(row: {
+  id: string;
   project_slug: string | null;
   sandbox_id: string | null;
   thread_id: string | null;
@@ -72,6 +74,7 @@ function rowToSession(row: {
 }): Session | null {
   if (!row.project_slug || !row.sandbox_id || !row.repo) return null;
   return {
+    id: row.id,
     slug: row.project_slug,
     sandboxId: row.sandbox_id,
     threadId: row.thread_id,
@@ -191,24 +194,45 @@ export type StoredMessage = {
   parts: Array<{ type: string; [k: string]: unknown }>;
 };
 
+async function getCurrentSessionTranscript(
+  sessionId: string,
+): Promise<StoredMessage[]> {
+  const supabase = getAdminClient();
+  const { data } = await supabase
+    .from("sessions")
+    .select("transcript")
+    .eq("id", sessionId)
+    .maybeSingle();
+  const t = data?.transcript;
+  if (!Array.isArray(t)) return [];
+  return t as StoredMessage[];
+}
+
 export async function getThreadMessages(slug: string): Promise<StoredMessage[]> {
-  // Thread-first: 21st has the live state including in-progress streaming
-  // (covers user-leaves-mid-turn case).
-  // Transcript fallback: covers dead sandboxes / brand-new sessions that
-  // inherit a prior project's history.
+  // Priority for showing chat history:
+  //   1. Live thread on 21st (covers in-progress / mid-stream state)
+  //   2. CURRENT session's persisted transcript (recent autosave)
+  //   3. Prior session's transcript (fresh session inheriting old project history)
   const session = await getActiveSession(slug);
-  if (session?.threadId) {
-    try {
-      const thread = await client().threads.get({
-        sandboxId: session.sandboxId,
-        threadId: session.threadId,
-      });
-      const raw = thread.messages;
-      if (Array.isArray(raw) && raw.length > 0) return raw as StoredMessage[];
-    } catch {
-      // fall through
+  if (session) {
+    if (session.threadId) {
+      try {
+        const thread = await client().threads.get({
+          sandboxId: session.sandboxId,
+          threadId: session.threadId,
+        });
+        const raw = thread.messages;
+        if (Array.isArray(raw) && raw.length > 0)
+          return raw as StoredMessage[];
+      } catch {
+        // fall through
+      }
     }
+    const own = await getCurrentSessionTranscript(session.id);
+    if (own.length > 0) return own;
   }
+  // No live session OR live session has no messages yet: fall back to the most
+  // recent persisted transcript for this slug (prior session continuation).
   return getLatestTranscript(slug);
 }
 

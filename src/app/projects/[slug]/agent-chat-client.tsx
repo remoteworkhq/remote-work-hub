@@ -448,10 +448,8 @@ export default function AgentChatClient({
     })();
   }, [status, messages.length, slug]);
 
-  // Persist transcript continuously, debounced. Captures user message
-  // immediately and the agent's evolving stream state so a mid-turn nav-away
-  // never loses content. ~1 write per ~800ms during streaming, 1 final on
-  // ready — bounded.
+  // Persist transcript continuously, debounced 300ms. Captures the user's
+  // message immediately on send and each agent stream chunk while streaming.
   useEffect(() => {
     if (messages.length === 0) return;
     const timer = setTimeout(() => {
@@ -460,9 +458,28 @@ export default function AgentChatClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slug, messages }),
       }).catch(() => {});
-    }, 800);
+    }, 300);
     return () => clearTimeout(timer);
   }, [messages, status, slug]);
+
+  // On unmount (SPA nav, tab close, refresh), fire a sendBeacon snapshot so
+  // we never lose content because the debounce hadn't elapsed yet.
+  const messagesForUnmountRef = useRef(messages);
+  useEffect(() => {
+    messagesForUnmountRef.current = messages;
+  }, [messages]);
+  useEffect(() => {
+    return () => {
+      const m = messagesForUnmountRef.current;
+      if (!m || m.length === 0) return;
+      try {
+        const blob = new Blob([JSON.stringify({ slug, messages: m })], {
+          type: "application/json",
+        });
+        navigator.sendBeacon?.("/api/sessions/transcript", blob);
+      } catch {}
+    };
+  }, [slug]);
 
   // Auto-push only when last reply mentioned repo work
   useEffect(() => {
