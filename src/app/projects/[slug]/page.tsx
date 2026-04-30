@@ -8,19 +8,7 @@ const PROJECT_REPOS: Record<string, string> = {
 };
 
 const SANDBOX_TIMEOUT_MS = 30 * 60 * 1000;
-
-function buildRecoveryScript(repo: string, ghToken: string): string {
-  // Inline-quoted bash. Lives only inside the sandbox; never exposed to the browser.
-  return [
-    "#!/bin/bash",
-    "set -e",
-    `git clone "https://x-access-token:${ghToken}@github.com/${repo}.git" /workspace`,
-    `git -C /workspace config user.name "Remote Work Hub Agent"`,
-    `git -C /workspace config user.email "agent@remoteworkhq.local"`,
-    `git -C /workspace remote set-url origin "https://x-access-token:${ghToken}@github.com/${repo}.git"`,
-    `echo "ready" > /workspace/.hub-ready`,
-  ].join("\n");
-}
+const SETUP_WAIT_SECONDS = 30;
 
 export default async function ProjectPage({ params }: PageProps) {
   const { slug } = await params;
@@ -42,20 +30,31 @@ export default async function ProjectPage({ params }: PageProps) {
   if (!ghToken) return <ErrorState msg="Missing GITHUB_TOKEN env var. Add a PAT with 'repo' scope on remoteworkhq, then redeploy." />;
   if (!repo) return <ErrorState msg={`No GitHub repo mapped for project "${slug}".`} />;
 
-  const recoveryScript = buildRecoveryScript(repo, ghToken);
-
   const client = new AgentClient({ apiKey });
   const sandbox = await client.sandboxes.create({
     agent: "hub-tester",
     timeoutMs: SANDBOX_TIMEOUT_MS,
-    files: {
-      "/usr/local/bin/init-workspace": recoveryScript,
-    },
     setup: [
-      "chmod +x /usr/local/bin/init-workspace",
-      "/usr/local/bin/init-workspace",
+      `git clone "https://x-access-token:${ghToken}@github.com/${repo}.git" /workspace`,
+      `git -C /workspace config user.name "Remote Work Hub Agent"`,
+      `git -C /workspace config user.email "agent@remoteworkhq.local"`,
+      `git -C /workspace remote set-url origin "https://x-access-token:${ghToken}@github.com/${repo}.git"`,
+      `touch /workspace/.hub-ready`,
     ],
   });
+
+  // Block until setup signals ready (clone done + git configured), then render.
+  const wait = await client.sandboxes.exec({
+    sandboxId: sandbox.id,
+    command: `for i in $(seq 1 ${SETUP_WAIT_SECONDS}); do [ -f /workspace/.hub-ready ] && echo ready && exit 0; sleep 1; done; echo timeout && exit 1`,
+  });
+  if (wait.exitCode !== 0) {
+    return (
+      <ErrorState
+        msg={`Sandbox setup timed out (${SETUP_WAIT_SECONDS}s). Likely cause: GITHUB_TOKEN is invalid or lacks 'repo' scope on remoteworkhq. Check Vercel env vars and rotate the token if needed.`}
+      />
+    );
+  }
 
   return (
     <main className="min-h-dvh px-6 py-10 max-w-4xl mx-auto">
