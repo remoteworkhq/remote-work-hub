@@ -12,9 +12,15 @@ const SETUP_WAIT_SECONDS = 30;
 const PROJECT_PATH = "/home/user/workspace/project";
 const READY_PATH = `${PROJECT_PATH}/.hub-ready`;
 
+// Restrict sandbox outbound to GitHub only — bypasses 21st vault proxy substitution
+// so the real PAT in the remote URL flows through to github.com unchanged.
+const NETWORK_ALLOW = ["github.com", "*.github.com", "objects.githubusercontent.com", "codeload.github.com"];
+const NETWORK_DENY = ["0.0.0.0/0"];
+
 export default async function ProjectPage({ params }: PageProps) {
   const { slug } = await params;
   const apiKey = process.env.API_KEY_21ST;
+  const ghToken = process.env.GITHUB_TOKEN;
   const repo = PROJECT_REPOS[slug];
 
   function ErrorState({ msg, hint }: { msg: string; hint?: string }) {
@@ -31,16 +37,17 @@ export default async function ProjectPage({ params }: PageProps) {
   }
 
   if (!apiKey) return <ErrorState msg="Missing API_KEY_21ST env var. Set it in Vercel and redeploy." />;
+  if (!ghToken) return <ErrorState msg="Missing GITHUB_TOKEN env var. Add a PAT with 'repo' scope on remoteworkhq, then redeploy." />;
   if (!repo) return <ErrorState msg={`No GitHub repo mapped for project "${slug}".`} />;
 
-  // Token in URL is a placeholder. The 21st vault proxy substitutes it on outbound github.com calls.
-  const PLACEHOLDER_TOKEN = "vault-injected";
-  const remoteUrl = `https://x-access-token:${PLACEHOLDER_TOKEN}@github.com/${repo}.git`;
+  const remoteUrl = `https://x-access-token:${ghToken}@github.com/${repo}.git`;
 
   const client = new AgentClient({ apiKey });
   const sandbox = await client.sandboxes.create({
     agent: "hub-tester",
     timeoutMs: SANDBOX_TIMEOUT_MS,
+    networkAllowOut: NETWORK_ALLOW,
+    networkDenyOut: NETWORK_DENY,
     setup: [
       `mkdir -p /home/user/workspace`,
       `git clone ${remoteUrl} ${PROJECT_PATH}`,
@@ -61,7 +68,7 @@ export default async function ProjectPage({ params }: PageProps) {
     return (
       <ErrorState
         msg={`Sandbox setup timed out (${SETUP_WAIT_SECONDS}s).`}
-        hint="Likely cause: clone failed because the vault proxy didn't inject credentials at clone time (sandbox-test is public so this would only matter for private repos). Check the sandbox logs in 21st dashboard."
+        hint="Likely cause: clone failed. Verify GITHUB_TOKEN in Vercel is a classic PAT with 'repo' scope, then redeploy."
       />
     );
   }
