@@ -7,8 +7,14 @@ type Project = {
   status: string;
 };
 
-// Hardcoded for now. Wired to Supabase once we decide on data path.
-const projects: Project[] = [];
+const projects: Project[] = [
+  {
+    slug: "test-project",
+    name: "Test Project",
+    description: "POC link to spawn a Claude Code agent in the sandbox.",
+    status: "test",
+  },
+];
 
 export default function HomePage() {
   return (
@@ -26,30 +32,21 @@ export default function HomePage() {
           <span className="text-sm text-zinc-500">{projects.length} connected</span>
         </div>
 
-        {projects.length === 0 ? (
-          <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-8 text-center">
-            <p className="text-zinc-400">No projects yet.</p>
-            <p className="text-sm text-zinc-500 mt-1">
-              Wire the first one once we pick the data path.
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {projects.map((p) => (
-              <Link
-                key={p.slug}
-                href={`/projects/${p.slug}`}
-                className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5 hover:border-zinc-700 hover:bg-zinc-900/70 transition block"
-              >
-                <div className="flex items-center justify-between">
-                  <h3 className="font-medium">{p.name}</h3>
-                  <span className="text-xs text-zinc-500">{p.status}</span>
-                </div>
-                <p className="mt-1 text-sm text-zinc-400">{p.description}</p>
-              </Link>
-            ))}
-          </div>
-        )}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {projects.map((p) => (
+            <Link
+              key={p.slug}
+              href={`/projects/${p.slug}`}
+              className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5 hover:border-zinc-700 hover:bg-zinc-900/70 transition block"
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="font-medium">{p.name}</h3>
+                <span className="text-xs text-zinc-500">{p.status}</span>
+              </div>
+              <p className="mt-1 text-sm text-zinc-400">{p.description}</p>
+            </Link>
+          ))}
+        </div>
       </section>
     </main>
   );
