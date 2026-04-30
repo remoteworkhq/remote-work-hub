@@ -49,23 +49,32 @@ export async function POST(request: NextRequest) {
     const b64 = buf.toString("base64");
     const filename = safeName(file.name);
     const dest = `/home/user/uploads/${filename}`;
+    // Random staging name to avoid clashes if user uploads in parallel
+    const staging = `/tmp/upload_${Date.now()}_${Math.random().toString(36).slice(2)}.b64`;
 
     const c = new AgentClient({ apiKey: need("API_KEY_21ST") });
-    // Stream the file content via base64 onto the sandbox; mkdir + decode.
-    // Splitting into chunks if huge; b64 string is ~33% bigger than the binary,
-    // we already capped at 25MB so this is safe inside a single command.
+
+    // 1) Use the proper files API to ship the base64 over HTTP body
+    //    (NOT through a shell command — that hit ARG_MAX and failed for any non-tiny upload).
+    await c.sandboxes.files.write({
+      sandboxId: session.sandboxId,
+      files: { [staging]: b64 },
+    });
+
+    // 2) Tiny exec to decode the staged base64 into the real path
     const r = await c.sandboxes.exec({
       sandboxId: session.sandboxId,
       command:
         `mkdir -p /home/user/uploads && ` +
-        `printf %s '${b64}' | base64 -d > '${dest}' && ` +
+        `base64 -d '${staging}' > '${dest}' && ` +
         `chmod 644 '${dest}' && ` +
+        `rm -f '${staging}' && ` +
         `wc -c '${dest}'`,
-      timeoutMs: 25_000,
+      timeoutMs: 20_000,
     });
     if (r.exitCode !== 0) {
       return NextResponse.json(
-        { error: "sandbox write failed", detail: r.stderr || r.stdout },
+        { error: "sandbox decode failed", detail: r.stderr || r.stdout },
         { status: 500 },
       );
     }

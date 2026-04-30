@@ -448,20 +448,21 @@ export default function AgentChatClient({
     })();
   }, [status, messages.length, slug]);
 
-  // Persist transcript on every turn end so chat survives sandbox death.
-  // Fires whenever messages.length grows after streaming completes.
-  const lastPersistedLengthRef = useRef(0);
+  // Persist transcript continuously, debounced. Captures user message
+  // immediately and the agent's evolving stream state so a mid-turn nav-away
+  // never loses content. ~1 write per ~800ms during streaming, 1 final on
+  // ready — bounded.
   useEffect(() => {
-    if (status !== "ready") return;
     if (messages.length === 0) return;
-    if (messages.length === lastPersistedLengthRef.current) return;
-    lastPersistedLengthRef.current = messages.length;
-    void fetch("/api/sessions/transcript", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slug, messages }),
-    }).catch(() => {});
-  }, [status, messages, slug]);
+    const timer = setTimeout(() => {
+      void fetch("/api/sessions/transcript", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug, messages }),
+      }).catch(() => {});
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [messages, status, slug]);
 
   // Auto-push only when last reply mentioned repo work
   useEffect(() => {
@@ -842,7 +843,7 @@ export default function AgentChatClient({
 
           <div
             className={cn(
-              "flex items-end gap-3 border bg-ink-2/40 transition-colors",
+              "flex items-end border bg-ink-2/40 transition-colors",
               inputFocused ? "border-amber/40" : "border-rule",
             )}
           >
@@ -858,7 +859,7 @@ export default function AgentChatClient({
               onClick={handleAttachClick}
               disabled={uploading || !hydrated}
               title="Attach files (uploaded into the sandbox; agent can read them)"
-              className="pl-3 pt-3.5 text-paper-faint hover:text-amber transition-colors disabled:opacity-40"
+              className="p-4 text-paper-faint hover:text-amber transition-colors disabled:opacity-40 shrink-0"
             >
               {uploading ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -866,9 +867,9 @@ export default function AgentChatClient({
                 <Paperclip className="w-4 h-4" />
               )}
             </button>
-            <div className="font-mono text-amber/80 text-sm pt-4 select-none">
+            <span className="font-mono text-amber/80 text-sm pb-4 select-none shrink-0">
               ›
-            </div>
+            </span>
             <textarea
               ref={textareaRef}
               value={input}
@@ -885,10 +886,10 @@ export default function AgentChatClient({
                   : "Loading prior chat…"
               }
               disabled={!hydrated}
-              className="flex-1 resize-none bg-transparent border-none text-paper text-[15px] placeholder:text-paper-faint focus:outline-none py-4 min-h-[56px] disabled:opacity-50"
+              className="flex-1 resize-none bg-transparent border-none text-paper text-[15px] placeholder:text-paper-faint focus:outline-none px-3 py-4 min-h-[56px] disabled:opacity-50"
               style={{ overflow: "hidden" }}
             />
-            <div className="p-2">
+            <div className="p-2 shrink-0">
               {isStreaming ? (
                 <motion.button
                   type="button"
