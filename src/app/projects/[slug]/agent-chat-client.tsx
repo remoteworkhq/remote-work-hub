@@ -334,10 +334,11 @@ export default function AgentChatClient({
     [sandboxId, threadId],
   );
 
-  const { messages, setMessages, status, stop, error, sendMessage } = useChat(
-    { chat },
-  );
+  const { messages: liveMessages, status, stop, error, sendMessage } =
+    useChat({ chat });
+  const [historical, setHistorical] = useState<UIMessage[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const messagesKey = `rwh.msgs.${slug}`;
 
   // Restore input draft on mount (per-slug). Survives nav / session death.
   useEffect(() => {
@@ -355,6 +356,44 @@ export default function AgentChatClient({
     } catch {}
   }, [input, draftKey]);
 
+  // INSTANT restore from localStorage (synchronous, no network).
+  // Runs before async server hydration, so the user sees the previous
+  // chat the moment the page loads.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(messagesKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setHistorical(parsed as UIMessage[]);
+        }
+      }
+    } catch {}
+    // intentionally only on slug change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messagesKey]);
+
+  // Merged view: historical + live, dedupe by id (live wins).
+  const messages = useMemo<UIMessage[]>(() => {
+    if (historical.length === 0) return liveMessages as unknown as UIMessage[];
+    const liveIds = new Set(
+      (liveMessages as unknown as UIMessage[]).map((m) => m.id),
+    );
+    const histPruned = historical.filter((h) => !liveIds.has(h.id));
+    return [
+      ...histPruned,
+      ...(liveMessages as unknown as UIMessage[]),
+    ];
+  }, [historical, liveMessages]);
+
+  // Persist merged view to localStorage so it survives any nav/refresh.
+  useEffect(() => {
+    if (messages.length === 0) return;
+    try {
+      localStorage.setItem(messagesKey, JSON.stringify(messages));
+    } catch {}
+  }, [messages, messagesKey]);
+
   // Auto-scroll (instant — smooth scroll added perceived lag)
   useEffect(() => {
     const el = scrollRef.current;
@@ -362,9 +401,10 @@ export default function AgentChatClient({
     el.scrollTop = el.scrollHeight;
   }, [messages.length, status]);
 
-  // Hydrate prior chat on mount — always shows, regardless of how this
-  // session was reached. Input is disabled (see `submit`/render below) until
-  // hydration completes, so we never race a typed message against the seed.
+  // Server hydration — runs after the localStorage restore. If the server
+  // returns a longer / fresher message list, replaces the local one. Updates
+  // our OWN `historical` state — does not depend on useChat's setMessages
+  // (which is unreliable / version-dependent in @ai-sdk/react v2).
   useEffect(() => {
     if (hydrated) return;
     let cancelled = false;
@@ -379,9 +419,7 @@ export default function AgentChatClient({
         const data = (await r.json()) as { messages?: unknown };
         if (cancelled) return;
         if (Array.isArray(data.messages) && data.messages.length > 0) {
-          setMessages(
-            data.messages as Parameters<typeof setMessages>[0],
-          );
+          setHistorical(data.messages as UIMessage[]);
         }
       } finally {
         if (!cancelled) setHydrated(true);
@@ -390,7 +428,7 @@ export default function AgentChatClient({
     return () => {
       cancelled = true;
     };
-  }, [slug, hydrated, setMessages]);
+  }, [slug, hydrated]);
 
   // Hush unused-warning when threadId not used elsewhere
   void recordedThreadIdRef;
@@ -464,6 +502,7 @@ export default function AgentChatClient({
 
   // On unmount (SPA nav, tab close, refresh), fire a sendBeacon snapshot so
   // we never lose content because the debounce hadn't elapsed yet.
+  // Also writes the latest merged view to localStorage one more time.
   const messagesForUnmountRef = useRef(messages);
   useEffect(() => {
     messagesForUnmountRef.current = messages;
@@ -473,13 +512,16 @@ export default function AgentChatClient({
       const m = messagesForUnmountRef.current;
       if (!m || m.length === 0) return;
       try {
+        localStorage.setItem(messagesKey, JSON.stringify(m));
+      } catch {}
+      try {
         const blob = new Blob([JSON.stringify({ slug, messages: m })], {
           type: "application/json",
         });
         navigator.sendBeacon?.("/api/sessions/transcript", blob);
       } catch {}
     };
-  }, [slug]);
+  }, [slug, messagesKey]);
 
   // Auto-push only when last reply mentioned repo work
   useEffect(() => {
