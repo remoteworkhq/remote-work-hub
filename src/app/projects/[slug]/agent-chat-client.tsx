@@ -12,12 +12,14 @@ import {
   useRef,
   useState,
 } from "react";
+import { useSessions } from "@/components/session-provider";
 import { cn } from "@/lib/utils";
 
 type PushResult = { exitCode: number; stdout: string; stderr: string };
 
 type Props = {
   sandboxId: string;
+  threadId: string | null;
   slug: string;
   repo: string;
 };
@@ -51,14 +53,20 @@ type Part = {
   state?: string;
 };
 
-function ToolCard({ name, cmd, output, state }: {
+function ToolCard({
+  name,
+  cmd,
+  output,
+  state,
+}: {
   name: string;
   cmd: string;
   output: string;
   state?: string;
 }) {
   const [open, setOpen] = useState(true);
-  const isRunning = state && state !== "output-available" && state !== "result";
+  const isRunning =
+    state && state !== "output-available" && state !== "result";
 
   return (
     <div className="my-3 border border-rule-soft/60 bg-ink-2/40 overflow-hidden">
@@ -111,21 +119,19 @@ function MessagePart({ part }: { part: Part }) {
     const name = part.type.slice(5);
     const input = part.input ?? {};
     const cmd =
-      typeof input.command === "string" ? input.command : JSON.stringify(input);
+      typeof input.command === "string"
+        ? input.command
+        : JSON.stringify(input);
     const output = part.output;
     const outputText =
       typeof output === "string"
         ? output
         : output && typeof output === "object"
-          ? (output as { text?: string }).text ?? JSON.stringify(output, null, 2)
+          ? (output as { text?: string }).text ??
+            JSON.stringify(output, null, 2)
           : "";
     return (
-      <ToolCard
-        name={name}
-        cmd={cmd}
-        output={outputText}
-        state={part.state}
-      />
+      <ToolCard name={name} cmd={cmd} output={outputText} state={part.state} />
     );
   }
   return null;
@@ -191,7 +197,7 @@ function MessageRow({
 function ThinkingRow() {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 8 }}
+      initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
       className="py-6 grid justify-items-start"
@@ -222,17 +228,23 @@ function ThinkingRow() {
   );
 }
 
-export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
+export default function AgentChatClient({
+  sandboxId,
+  threadId,
+  slug,
+  repo,
+}: Props) {
   const router = useRouter();
+  const { end: endSession, recordThread } = useSessions();
   const [ending, setEnding] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [pushResult, setPushResult] = useState<PushResult | null>(null);
   const [autoPush, setAutoPush] = useState(true);
   const [input, setInput] = useState("");
   const [inputFocused, setInputFocused] = useState(false);
-  const closedRef = useRef(false);
   const lastAutoPushedAtRef = useRef<number>(0);
   const prevStatusRef = useRef<string>("ready");
+  const recordedThreadIdRef = useRef<string | null>(threadId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { ref: textareaRef, adjust } = useAutoResizeTextarea(56, 200);
 
@@ -242,13 +254,14 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
         agent: "hub-tester",
         tokenUrl: "/api/an-token",
         sandboxId,
+        ...(threadId ? { threadId } : {}),
       }),
-    [sandboxId],
+    [sandboxId, threadId],
   );
 
   const { messages, status, stop, error, sendMessage } = useChat({ chat });
 
-  // Auto-scroll to latest
+  // Auto-scroll
   useEffect(() => {
     scrollRef.current?.scrollTo({
       top: scrollRef.current.scrollHeight,
@@ -256,29 +269,25 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
     });
   }, [messages.length, status]);
 
-  // Sandbox cleanup on close
+  // Capture threadId once it appears (createAgentChat assigns one when missing)
   useEffect(() => {
-    const beacon = () => {
-      if (closedRef.current) return;
-      closedRef.current = true;
-      navigator.sendBeacon(`/api/close-sandbox?id=${sandboxId}`);
-    };
-    window.addEventListener("beforeunload", beacon);
-    window.addEventListener("pagehide", beacon);
-    return () => {
-      window.removeEventListener("beforeunload", beacon);
-      window.removeEventListener("pagehide", beacon);
-      beacon();
-    };
-  }, [sandboxId]);
+    type ChatWithThread = { threadId?: string };
+    const tid = (chat as unknown as ChatWithThread).threadId;
+    if (tid && tid !== recordedThreadIdRef.current) {
+      recordedThreadIdRef.current = tid;
+      void recordThread(slug, tid);
+    }
+  }, [chat, messages.length, slug, recordThread]);
 
   const runPush = useCallback(
     async (auto: boolean): Promise<PushResult> => {
       setPushing(true);
       if (!auto) setPushResult(null);
       try {
-        const r = await fetch(`/api/push-sandbox?id=${sandboxId}`, {
+        const r = await fetch(`/api/sessions/push`, {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slug }),
         });
         const data = (await r.json()) as PushResult | { error: string };
         const result: PushResult =
@@ -302,12 +311,10 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
         setPushing(false);
       }
     },
-    [sandboxId],
+    [slug],
   );
 
-  // Auto-push when streaming -> ready (only if toggle on AND last assistant
-  // message looks like it touched the repo — heuristic, but avoids waking the
-  // sandbox after every chitchat reply).
+  // Auto-push only when last reply mentioned repo work
   useEffect(() => {
     const prev = prevStatusRef.current;
     prevStatusRef.current = status;
@@ -322,7 +329,8 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
         .map((p) => {
           if (p.type === "text") return p.text ?? "";
           if (typeof p.type === "string" && p.type.startsWith("tool-")) {
-            const cmd = (p.input as { command?: string } | undefined)?.command ?? "";
+            const cmd =
+              (p.input as { command?: string } | undefined)?.command ?? "";
             return cmd;
           }
           return "";
@@ -342,16 +350,12 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
   }, [status, messages.length, runPush, autoPush]);
 
   const handleEnd = async () => {
-    if (closedRef.current) {
-      router.push("/");
-      return;
-    }
     setEnding(true);
-    closedRef.current = true;
     try {
-      await fetch(`/api/close-sandbox?id=${sandboxId}`, { method: "POST" });
-    } catch {}
-    router.push("/");
+      await endSession(slug);
+    } finally {
+      router.push("/");
+    }
   };
 
   const submit = () => {
@@ -372,20 +376,20 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
   const pushOk = pushResult?.exitCode === 0;
   const isStreaming = status === "streaming";
   const isSubmitted = status === "submitted";
-  const lastMsg = messages[messages.length - 1] as unknown as UIMessage | undefined;
+  const lastMsg = messages[messages.length - 1] as unknown as
+    | UIMessage
+    | undefined;
   const lastAssistantHasText = (lastMsg?.parts ?? []).some(
     (p) => p.type === "text" && (p.text ?? "").length > 0,
   );
-  // Show thinking when waiting OR when streaming has started but no text chunk
-  // has arrived yet (covers the silent gap between submit and first token).
   const showThinking =
     (isSubmitted && lastMsg?.role === "user") ||
-    (isStreaming && (lastMsg?.role !== "assistant" || !lastAssistantHasText));
+    (isStreaming &&
+      (lastMsg?.role !== "assistant" || !lastAssistantHasText));
   const sandboxShort = sandboxId.split("-")[0];
 
   return (
     <div className="min-h-dvh flex flex-col">
-      {/* HEADER */}
       <header className="border-b border-rule-soft/60 sticky top-0 z-20 backdrop-blur-xl bg-ink/70">
         <div className="max-w-[1280px] mx-auto px-6 lg:px-10 py-5 flex items-center gap-6">
           <Link
@@ -431,7 +435,11 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
             <button
               type="button"
               onClick={() => setAutoPush((v) => !v)}
-              title={autoPush ? "Auto-push is on after each turn" : "Auto-push is off — use the Push button manually"}
+              title={
+                autoPush
+                  ? "Auto-push is on after each turn"
+                  : "Auto-push is off — push manually with the Push button"
+              }
               className={cn(
                 "font-mono text-[11px] uppercase tracking-[0.2em] px-3 py-2 border transition-colors flex items-center gap-2",
                 autoPush
@@ -460,7 +468,7 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
               type="button"
               onClick={handleEnd}
               disabled={ending}
-              className="font-mono text-[11px] uppercase tracking-[0.2em] px-3 py-2 border border-rule hover:border-amber/60 hover:text-amber transition-colors disabled:opacity-50"
+              className="font-mono text-[11px] uppercase tracking-[0.2em] px-3 py-2 border border-rule hover:border-rose-soft/60 hover:text-rose-soft transition-colors disabled:opacity-50"
             >
               {ending ? "ending…" : "end"}
             </button>
@@ -468,7 +476,6 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
         </div>
       </header>
 
-      {/* PUSH RESULT */}
       <AnimatePresence>
         {pushResult && (
           <motion.div
@@ -507,11 +514,7 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
         )}
       </AnimatePresence>
 
-      {/* CHAT FEED — full width, scroll inside */}
-      <section
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto"
-      >
+      <section ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="max-w-[1280px] mx-auto px-6 lg:px-10 divide-y divide-rule-soft/30">
           {messages.length === 0 && !showThinking && (
             <div className="py-24 text-center">
@@ -524,7 +527,7 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
               <p className="mt-3 text-sm text-paper-faint max-w-md mx-auto">
                 Sandbox spun up, repo cloned to{" "}
                 <code className="font-mono text-paper-dim">./project</code>.
-                Anything you commit auto-pushes when the turn finishes.
+                Anything the agent commits auto-pushes when the turn finishes.
               </p>
             </div>
           )}
@@ -550,7 +553,6 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
         </div>
       </section>
 
-      {/* INPUT DOCK */}
       <div className="sticky bottom-0 z-10 border-t border-rule-soft/60 bg-ink/85 backdrop-blur-xl">
         <div className="max-w-[1280px] mx-auto px-6 lg:px-10 py-4">
           <div
@@ -611,23 +613,17 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
             </div>
           </div>
           <div className="mt-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.22em] text-paper-faint">
-            <span>enter sends · shift+enter newline</span>
+            <span>enter sends · shift+enter newline · session persists across nav</span>
             <span className="flex items-center gap-2">
               <span
                 className={cn(
                   "w-1.5 h-1.5 rounded-full",
-                  isStreaming
+                  isStreaming || isSubmitted
                     ? "bg-amber pulse-dot"
-                    : isSubmitted
-                      ? "bg-amber pulse-dot"
-                      : "bg-emerald-soft/70",
+                    : "bg-emerald-soft/70",
                 )}
               />
-              {isStreaming
-                ? "streaming"
-                : isSubmitted
-                  ? "queued"
-                  : "ready"}
+              {isStreaming ? "streaming" : isSubmitted ? "queued" : "ready"}
             </span>
           </div>
         </div>

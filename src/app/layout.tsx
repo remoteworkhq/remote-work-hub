@@ -4,6 +4,7 @@ import {
   IBM_Plex_Sans,
   IBM_Plex_Mono,
 } from "next/font/google";
+import { SessionProvider } from "@/components/session-provider";
 import "./globals.css";
 
 const display = Newsreader({
@@ -42,12 +43,10 @@ export default function RootLayout({
       className={`dark ${display.variable} ${sans.variable} ${mono.variable}`}
     >
       <body className="min-h-dvh bg-ink text-paper antialiased">
-        {/* Ambient background — fixed, behind everything */}
         <div
           aria-hidden
           className="fixed inset-0 -z-10 overflow-hidden pointer-events-none"
         >
-          {/* Vignette gradient mesh */}
           <div
             className="absolute -top-[40vh] -left-[30vw] w-[80vw] h-[80vw] rounded-full opacity-70"
             style={{
@@ -69,9 +68,7 @@ export default function RootLayout({
                 "radial-gradient(closest-side, oklch(0.78 0.13 160 / 0.05), transparent 70%)",
             }}
           />
-          {/* Subtle grain */}
           <div className="absolute inset-0 bg-grain opacity-[0.07] mix-blend-overlay" />
-          {/* Top edge highlight */}
           <div
             className="absolute inset-x-0 top-0 h-px"
             style={{
@@ -80,7 +77,7 @@ export default function RootLayout({
             }}
           />
         </div>
-        {children}
+        <SessionProvider>{children}</SessionProvider>
       </body>
     </html>
   );

@@ -1,0 +1,200 @@
+"use client";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
+export type Session = {
+  slug: string;
+  sandboxId: string;
+  threadId: string | null;
+  repo: string;
+  status: string;
+  createdAt: string;
+  lastActiveAt: string;
+};
+
+type SpawnState = "idle" | "spawning" | "ready" | "error";
+
+type Ctx = {
+  sessions: Session[];
+  spawnStates: Record<string, SpawnState>;
+  errors: Record<string, string | null>;
+  refresh: () => Promise<void>;
+  getOrCreate: (slug: string) => Promise<Session>;
+  end: (slug: string) => Promise<void>;
+  recordThread: (slug: string, threadId: string) => Promise<void>;
+  isActive: (slug: string) => boolean;
+  getSession: (slug: string) => Session | undefined;
+};
+
+const SessionCtx = createContext<Ctx | null>(null);
+
+const STORAGE_KEY = "rwh.sessions.v1";
+
+function loadCached(): Session[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCached(sessions: Session[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  } catch {
+    // ignore quota/serialization errors
+  }
+}
+
+export function SessionProvider({ children }: { children: React.ReactNode }) {
+  const [sessions, setSessions] = useState<Session[]>(() => loadCached());
+  const [spawnStates, setSpawnStates] = useState<Record<string, SpawnState>>({});
+  const [errors, setErrors] = useState<Record<string, string | null>>({});
+  const inFlightRef = useRef<Record<string, Promise<Session> | undefined>>({});
+
+  const refresh = useCallback(async () => {
+    const r = await fetch("/api/sessions");
+    if (!r.ok) return;
+    const data = (await r.json()) as { sessions: Session[] };
+    setSessions(data.sessions);
+    saveCached(data.sessions);
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const onFocus = () => void refresh();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refresh]);
+
+  const getOrCreate = useCallback(
+    async (slug: string): Promise<Session> => {
+      // De-dupe concurrent requests for the same slug
+      const existingPromise = inFlightRef.current[slug];
+      if (existingPromise) return existingPromise;
+
+      const promise = (async (): Promise<Session> => {
+        setSpawnStates((s) => ({ ...s, [slug]: "spawning" }));
+        setErrors((e) => ({ ...e, [slug]: null }));
+        try {
+          const r = await fetch("/api/sessions/spawn", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ slug }),
+          });
+          const data = await r.json();
+          if (!r.ok || !data.session) {
+            throw new Error(data.error || "spawn failed");
+          }
+          const session: Session = data.session;
+          setSessions((prev) => {
+            const without = prev.filter((s) => s.slug !== slug);
+            const next = [session, ...without];
+            saveCached(next);
+            return next;
+          });
+          setSpawnStates((s) => ({ ...s, [slug]: "ready" }));
+          return session;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "spawn failed";
+          setSpawnStates((s) => ({ ...s, [slug]: "error" }));
+          setErrors((e2) => ({ ...e2, [slug]: msg }));
+          throw e;
+        } finally {
+          inFlightRef.current[slug] = undefined;
+        }
+      })();
+      inFlightRef.current[slug] = promise;
+      return promise;
+    },
+    [],
+  );
+
+  const end = useCallback(async (slug: string) => {
+    await fetch("/api/sessions/end", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug }),
+    });
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.slug !== slug);
+      saveCached(next);
+      return next;
+    });
+    setSpawnStates((s) => {
+      const next = { ...s };
+      delete next[slug];
+      return next;
+    });
+  }, []);
+
+  const recordThread = useCallback(async (slug: string, threadId: string) => {
+    setSessions((prev) => {
+      const next = prev.map((s) =>
+        s.slug === slug ? { ...s, threadId } : s,
+      );
+      saveCached(next);
+      return next;
+    });
+    await fetch("/api/sessions/thread", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug, threadId }),
+    }).catch(() => {});
+  }, []);
+
+  const isActive = useCallback(
+    (slug: string) => sessions.some((s) => s.slug === slug),
+    [sessions],
+  );
+
+  const getSession = useCallback(
+    (slug: string) => sessions.find((s) => s.slug === slug),
+    [sessions],
+  );
+
+  const value = useMemo<Ctx>(
+    () => ({
+      sessions,
+      spawnStates,
+      errors,
+      refresh,
+      getOrCreate,
+      end,
+      recordThread,
+      isActive,
+      getSession,
+    }),
+    [
+      sessions,
+      spawnStates,
+      errors,
+      refresh,
+      getOrCreate,
+      end,
+      recordThread,
+      isActive,
+      getSession,
+    ],
+  );
+
+  return <SessionCtx.Provider value={value}>{children}</SessionCtx.Provider>;
+}
+
+export function useSessions(): Ctx {
+  const ctx = useContext(SessionCtx);
+  if (!ctx) throw new Error("useSessions outside of SessionProvider");
+  return ctx;
+}
