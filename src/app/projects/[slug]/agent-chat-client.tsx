@@ -107,33 +107,75 @@ function ToolCard({
   );
 }
 
+function extractText(part: Part): string {
+  // Try common shapes the AI SDK / 21st might emit.
+  const p = part as unknown as Record<string, unknown>;
+  if (typeof p.text === "string") return p.text;
+  if (typeof p.content === "string") return p.content;
+  if (Array.isArray(p.content)) {
+    return (p.content as Array<{ text?: string; type?: string }>)
+      .filter((c) => c?.type === "text" || typeof c?.text === "string")
+      .map((c) => c.text ?? "")
+      .join("");
+  }
+  return "";
+}
+
 function MessagePart({ part }: { part: Part }) {
-  if (part.type === "text") {
+  const t = part.type;
+
+  // Reasoning / step parts: render as italic muted (Claude thinking blocks)
+  if (t === "reasoning" || t === "thinking") {
+    const text = extractText(part);
+    if (!text) return null;
     return (
-      <p className="whitespace-pre-wrap leading-relaxed text-paper">
-        {part.text}
+      <p className="text-[13px] italic text-paper-faint whitespace-pre-wrap leading-relaxed">
+        {text}
       </p>
     );
   }
-  if (typeof part.type === "string" && part.type.startsWith("tool-")) {
-    const name = part.type.slice(5);
+
+  // Step markers — emit nothing visible (they're stream control)
+  if (t === "step-start" || t === "step-end" || t === "data") return null;
+
+  // Tool calls (any tool-*)
+  if (typeof t === "string" && t.startsWith("tool-")) {
+    const name = t.slice(5);
     const input = part.input ?? {};
     const cmd =
       typeof input.command === "string"
         ? input.command
-        : JSON.stringify(input);
+        : Object.keys(input).length > 0
+          ? JSON.stringify(input)
+          : "";
     const output = part.output;
     const outputText =
       typeof output === "string"
         ? output
         : output && typeof output === "object"
-          ? (output as { text?: string }).text ??
+          ? (output as { text?: string; stdout?: string; output?: string })
+              .text ??
+            (output as { stdout?: string }).stdout ??
             JSON.stringify(output, null, 2)
           : "";
     return (
-      <ToolCard name={name} cmd={cmd} output={outputText} state={part.state} />
+      <ToolCard
+        name={name}
+        cmd={cmd || "(no input)"}
+        output={outputText}
+        state={part.state}
+      />
     );
   }
+
+  // Default: try to render any text-like content
+  const text = extractText(part);
+  if (text) {
+    return (
+      <p className="whitespace-pre-wrap leading-relaxed text-paper">{text}</p>
+    );
+  }
+
   return null;
 }
 
@@ -272,7 +314,9 @@ export default function AgentChatClient({
     });
   }, [messages.length, status]);
 
-  // Hydrate prior messages from 21st thread on mount (so chat persists across nav)
+  // Hydrate prior messages from 21st thread on mount (so chat persists across nav).
+  // Race-safety: only seed if local state is still empty when fetch resolves —
+  // otherwise we'd wipe a fresh user/agent exchange that began during the fetch.
   useEffect(() => {
     if (!threadId || hydrated) return;
     let cancelled = false;
@@ -283,13 +327,17 @@ export default function AgentChatClient({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ slug }),
         });
-        if (!r.ok) return;
+        if (!r.ok || cancelled) return;
         const data = (await r.json()) as { messages?: unknown };
         if (cancelled) return;
-        if (Array.isArray(data.messages) && data.messages.length > 0) {
-          // setMessages accepts UIMessage[]; thread messages from 21st have
-          // the same {role, parts} shape, so the cast is safe.
-          setMessages(data.messages as Parameters<typeof setMessages>[0]);
+        if (
+          Array.isArray(data.messages) &&
+          data.messages.length > 0 &&
+          messages.length === 0
+        ) {
+          setMessages(
+            data.messages as Parameters<typeof setMessages>[0],
+          );
         }
       } finally {
         if (!cancelled) setHydrated(true);
@@ -298,6 +346,8 @@ export default function AgentChatClient({
     return () => {
       cancelled = true;
     };
+    // intentionally exclude `messages` from deps — we only check it at fetch resolution.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId, slug, hydrated, setMessages]);
 
   // Hush unused-warning when threadId not used elsewhere
@@ -513,6 +563,12 @@ export default function AgentChatClient({
                 ? "border-emerald-soft/40 bg-emerald-soft/[0.05]"
                 : "border-rose-soft/40 bg-rose-soft/[0.05]",
             )}
+            // Auto-dismiss successful pushes after 4s so they don't pile up
+            onAnimationComplete={() => {
+              if (pushOk) {
+                window.setTimeout(() => setPushResult(null), 4000);
+              }
+            }}
           >
             <div className="max-w-[1280px] mx-auto px-6 lg:px-10 py-3 flex items-start gap-4">
               <span
@@ -523,7 +579,7 @@ export default function AgentChatClient({
               >
                 {pushOk ? "✓ pushed" : `✗ exit ${pushResult.exitCode}`}
               </span>
-              <pre className="font-mono text-[11px] text-paper-dim whitespace-pre-wrap break-all flex-1">
+              <pre className="font-mono text-[11px] text-paper-dim whitespace-pre-wrap break-all flex-1 max-h-32 overflow-y-auto">
                 {pushResult.stdout}
                 {pushResult.stderr && `\n${pushResult.stderr}`}
               </pre>
