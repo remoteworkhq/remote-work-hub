@@ -284,7 +284,7 @@ export async function endSession(slug: string): Promise<void> {
     .in("status", ["ready", "spawning"]);
 }
 
-const SUMMARY_PROMPT = `You are wrapping up a session inside /workspace/project. Write a concise log (UNDER 1800 characters TOTAL) of this session to /home/user/.hub/log.md as plain markdown. Include:
+const SUMMARY_PROMPT = `You are wrapping up a session inside /workspace/project. Write a concise log (UNDER 1800 characters TOTAL) of this session to /home/user/.hub/context.md as plain markdown. Include:
 
 - "## Built" — what was added or changed (use git log -n 10 --oneline and git diff --stat HEAD~1)
 - "## Open" — what is unfinished, pending, or has known issues
@@ -340,7 +340,7 @@ async function writeSessionLog(slug: string, sandboxId: string): Promise<void> {
   const fileRead = await c.sandboxes
     .exec({
       sandboxId,
-      command: "cat /home/user/.hub/log.md 2>/dev/null | head -c 4000",
+      command: "cat /home/user/.hub/context.md 2>/dev/null | head -c 4000",
       timeoutMs: 8_000,
     })
     .catch(() => null);
