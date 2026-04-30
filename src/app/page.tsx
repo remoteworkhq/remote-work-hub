@@ -4,11 +4,11 @@ type Project = {
   slug: string;
   name: string;
   description: string;
+  status: string;
 };
 
-const projects: Project[] = [
-  // Real list comes from Supabase once wired.
-];
+// Hardcoded for now. Wired to Supabase once we decide on data path.
+const projects: Project[] = [];
 
 export default function HomePage() {
   return (
@@ -30,7 +30,7 @@ export default function HomePage() {
           <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-8 text-center">
             <p className="text-zinc-400">No projects yet.</p>
             <p className="text-sm text-zinc-500 mt-1">
-              Add one once Supabase is connected and the first app is ported.
+              Wire the first one once we pick the data path.
             </p>
           </div>
         ) : (
@@ -39,9 +39,12 @@ export default function HomePage() {
               <Link
                 key={p.slug}
                 href={`/projects/${p.slug}`}
-                className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5 hover:border-zinc-700 hover:bg-zinc-900/70 transition"
+                className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5 hover:border-zinc-700 hover:bg-zinc-900/70 transition block"
               >
-                <h3 className="font-medium">{p.name}</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-medium">{p.name}</h3>
+                  <span className="text-xs text-zinc-500">{p.status}</span>
+                </div>
                 <p className="mt-1 text-sm text-zinc-400">{p.description}</p>
               </Link>
             ))}
