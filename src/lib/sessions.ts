@@ -39,18 +39,26 @@ function buildRemoteUrl(repo: string, ghToken: string): string {
   return `https://x-access-token:${ghToken}@github.com/${repo}.git`;
 }
 
-function buildSetup(remoteUrl: string): string[] {
-  return [
+function buildSetup(remoteUrl: string, priorLog: string | null): string[] {
+  const steps = [
     `mkdir -p /home/user/workspace`,
-    // --depth 1 = ~3x faster clone for sandbox use; we don't need deep history.
+    // --depth 1 = ~3x faster clone; we don't need deep history.
     `git clone --depth 1 ${remoteUrl} ${PROJECT_PATH}`,
     `chmod -R a+rw ${PROJECT_PATH}`,
     `git -C ${PROJECT_PATH} config user.name "Remote Work Hub Agent"`,
     `git -C ${PROJECT_PATH} config user.email "agent@remoteworkhq.local"`,
     `git -C ${PROJECT_PATH} remote set-url origin ${remoteUrl}`,
     `git config --system --add safe.directory '*' || git config --global --add safe.directory '*'`,
-    `touch ${READY_PATH}`,
   ];
+  if (priorLog) {
+    // Inject prior session context as a file the agent reads on init.
+    // Use base64 so multi-line / quoted content survives the shell.
+    const b64 = Buffer.from(priorLog, "utf8").toString("base64");
+    steps.push(`mkdir -p /home/user/.hub`);
+    steps.push(`echo ${b64} | base64 -d > /home/user/.hub/context.md`);
+  }
+  steps.push(`touch ${READY_PATH}`);
+  return steps;
 }
 
 function rowToSession(row: {
@@ -131,12 +139,13 @@ export async function startSpawn(slug: string): Promise<Session> {
   const remoteUrl = buildRemoteUrl(repo, ghToken);
   const c = client();
 
+  const priorLog = await getLatestLog(slug);
   const sandbox = await c.sandboxes.create({
     agent: "hub-tester",
     timeoutMs: SANDBOX_TIMEOUT_MS,
     networkAllowOut: NETWORK_ALLOW,
     networkDenyOut: NETWORK_DENY,
-    setup: buildSetup(remoteUrl),
+    setup: buildSetup(remoteUrl, priorLog),
   });
 
   // Pre-create the conversation thread so we have a stable threadId from
@@ -256,22 +265,113 @@ export async function listActiveSessions(): Promise<Session[]> {
 }
 
 export async function endSession(slug: string): Promise<void> {
-  const supabase = getAdminClient();
-  const { data: rows } = await supabase
-    .from("sessions")
-    .select("sandbox_id")
-    .eq("project_slug", slug)
-    .in("status", ["ready", "spawning"]);
-  for (const row of rows ?? []) {
-    if (row.sandbox_id) {
-      await client().sandboxes.delete(row.sandbox_id).catch(() => {});
-    }
+  const session = await getActiveSession(slug);
+  if (!session) return;
+
+  // Best-effort: ask the agent to summarize before we kill the sandbox.
+  // Hard-cap so a slow summary never wedges the End action.
+  if (session.status === "ready") {
+    await writeSessionLog(slug, session.sandboxId).catch(() => {});
   }
+
+  await client().sandboxes.delete(session.sandboxId).catch(() => {});
+
+  const supabase = getAdminClient();
   await supabase
     .from("sessions")
     .update({ status: "dead", ended_at: new Date().toISOString() })
     .eq("project_slug", slug)
     .in("status", ["ready", "spawning"]);
+}
+
+const SUMMARY_PROMPT = `You are wrapping up a session inside /workspace/project. Write a concise log (UNDER 1800 characters TOTAL) of this session to /home/user/.hub/log.md as plain markdown. Include:
+
+- "## Built" — what was added or changed (use git log -n 10 --oneline and git diff --stat HEAD~1)
+- "## Open" — what is unfinished, pending, or has known issues
+- "## Next" — one or two suggested next steps for the future you
+
+Be terse. Bullet points. No fluff. Hard cap 1800 chars. After writing the file, reply only with "saved".`;
+
+const SUMMARY_WAIT_SECONDS = 35;
+
+async function writeSessionLog(slug: string, sandboxId: string): Promise<void> {
+  const c = client();
+  // Run on a separate thread so the user's main chat history stays clean.
+  const summaryThread = await c.threads.create({
+    sandboxId,
+    name: `_summary_${Date.now()}`,
+  });
+  await c.threads.run({
+    agent: "hub-tester",
+    sandboxId,
+    threadId: summaryThread.id,
+    messages: [
+      {
+        role: "user",
+        parts: [{ type: "text", text: SUMMARY_PROMPT }],
+      },
+    ],
+    mode: "background",
+  });
+
+  // Poll until completed (or timeout)
+  const deadline = Date.now() + SUMMARY_WAIT_SECONDS * 1000;
+  let done = false;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const t = await c.threads
+      .get({ sandboxId, threadId: summaryThread.id })
+      .catch(() => null);
+    if (!t) break;
+    if (t.status === "completed" || t.status === "error") {
+      done = true;
+      break;
+    }
+  }
+  if (!done) {
+    // Best-effort: clean up the summary thread
+    await c.threads
+      .delete({ sandboxId, threadId: summaryThread.id })
+      .catch(() => {});
+    return;
+  }
+
+  // Read the file the agent wrote
+  const fileRead = await c.sandboxes
+    .exec({
+      sandboxId,
+      command: "cat /home/user/.hub/log.md 2>/dev/null | head -c 4000",
+      timeoutMs: 8_000,
+    })
+    .catch(() => null);
+
+  await c.threads
+    .delete({ sandboxId, threadId: summaryThread.id })
+    .catch(() => {});
+
+  const summary = (fileRead?.stdout || "").trim();
+  if (!summary) return;
+
+  // Cap stored summary
+  const truncated = summary.length > 2000 ? summary.slice(0, 2000) : summary;
+  const supabase = getAdminClient();
+  await supabase
+    .from("project_logs")
+    .insert({ project_slug: slug, summary: truncated });
+}
+
+export async function getLatestLog(slug: string): Promise<string | null> {
+  const supabase = getAdminClient();
+  const { data } = await supabase
+    .from("project_logs")
+    .select("summary, created_at")
+    .eq("project_slug", slug)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!data?.summary) return null;
+  const ts = new Date(data.created_at).toISOString();
+  return `# Previous session log (${ts})\n\n${data.summary}\n`;
 }
 
 export async function recordThreadId(slug: string, threadId: string): Promise<void> {
