@@ -6,7 +6,7 @@ import type { ProjectMeta } from "@/lib/projects";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 
-const FRESH_WINDOW_MS = 30_000; // session counts as "just responded" for 30s
+const FRESH_WINDOW_MS = 3_000; // session counts as "just responded" for 3s
 
 function formatRelative(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -24,14 +24,15 @@ export default function HomeClient({ projects }: { projects: ProjectMeta[] }) {
   // Tick state so the glow fades naturally as time passes
   const [now, setNow] = useState(() => Date.now());
 
+  // Tick faster so the 3s "responded" window fades smoothly on screen
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 5_000);
+    const id = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(id);
   }, []);
 
-  // Poll session list every 8s so freshness updates show without manual refresh
+  // Poll session list every 2s so a fresh response is detected within ~2s
   useEffect(() => {
-    const id = setInterval(() => void refresh(), 8_000);
+    const id = setInterval(() => void refresh(), 2_000);
     return () => clearInterval(id);
   }, [refresh]);
 
