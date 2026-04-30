@@ -259,7 +259,10 @@ export default function AgentChatClient({
     [sandboxId, threadId],
   );
 
-  const { messages, status, stop, error, sendMessage } = useChat({ chat });
+  const { messages, setMessages, status, stop, error, sendMessage } = useChat(
+    { chat },
+  );
+  const [hydrated, setHydrated] = useState(false);
 
   // Auto-scroll
   useEffect(() => {
@@ -269,15 +272,37 @@ export default function AgentChatClient({
     });
   }, [messages.length, status]);
 
-  // Capture threadId once it appears (createAgentChat assigns one when missing)
+  // Hydrate prior messages from 21st thread on mount (so chat persists across nav)
   useEffect(() => {
-    type ChatWithThread = { threadId?: string };
-    const tid = (chat as unknown as ChatWithThread).threadId;
-    if (tid && tid !== recordedThreadIdRef.current) {
-      recordedThreadIdRef.current = tid;
-      void recordThread(slug, tid);
-    }
-  }, [chat, messages.length, slug, recordThread]);
+    if (!threadId || hydrated) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/sessions/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slug }),
+        });
+        if (!r.ok) return;
+        const data = (await r.json()) as { messages?: unknown };
+        if (cancelled) return;
+        if (Array.isArray(data.messages) && data.messages.length > 0) {
+          // setMessages accepts UIMessage[]; thread messages from 21st have
+          // the same {role, parts} shape, so the cast is safe.
+          setMessages(data.messages as Parameters<typeof setMessages>[0]);
+        }
+      } finally {
+        if (!cancelled) setHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [threadId, slug, hydrated, setMessages]);
+
+  // Hush unused-warning when threadId not used elsewhere
+  void recordedThreadIdRef;
+  void recordThread;
 
   const runPush = useCallback(
     async (auto: boolean): Promise<PushResult> => {

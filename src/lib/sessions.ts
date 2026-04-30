@@ -117,7 +117,7 @@ export async function getActiveSession(slug: string): Promise<Session | null> {
   return session;
 }
 
-// Phase 1: create the sandbox + insert the row + return immediately.
+// Phase 1: create the sandbox + thread + insert the row + return immediately.
 // The clone runs in 21st's sandbox in the background. Client must poll
 // finalizeSpawn() to flip to status=ready.
 export async function startSpawn(slug: string): Promise<Session> {
@@ -139,12 +139,21 @@ export async function startSpawn(slug: string): Promise<Session> {
     setup: buildSetup(remoteUrl),
   });
 
+  // Pre-create the conversation thread so we have a stable threadId from
+  // the start. Same threadId is reused across page reloads / nav, so chat
+  // history can be fetched and restored.
+  const thread = await c.threads.create({
+    sandboxId: sandbox.id,
+    name: slug,
+  });
+
   const supabase = getAdminClient();
   const { data, error } = await supabase
     .from("sessions")
     .insert({
       project_slug: slug,
       sandbox_id: sandbox.id,
+      thread_id: thread.id,
       repo,
       status: "spawning",
     })
@@ -165,6 +174,28 @@ export async function startSpawn(slug: string): Promise<Session> {
   const session = rowToSession(data);
   if (!session) throw new Error("Failed to materialize session row");
   return session;
+}
+
+export type StoredMessage = {
+  id?: string;
+  role: string;
+  parts: Array<{ type: string; [k: string]: unknown }>;
+};
+
+export async function getThreadMessages(slug: string): Promise<StoredMessage[]> {
+  const session = await getActiveSession(slug);
+  if (!session || !session.threadId) return [];
+  try {
+    const thread = await client().threads.get({
+      sandboxId: session.sandboxId,
+      threadId: session.threadId,
+    });
+    const raw = thread.messages;
+    if (!Array.isArray(raw)) return [];
+    return raw as StoredMessage[];
+  } catch {
+    return [];
+  }
 }
 
 // Phase 2: check if the workspace marker exists. Updates DB to ready if so.
