@@ -307,24 +307,33 @@ export async function listActiveSessions(): Promise<Session[]> {
   return sessions;
 }
 
+// Fast end: kill sandbox + mark dead. ~1s. Summary writing was moved to a
+// separate manual trigger so the End button stays snappy.
 export async function endSession(slug: string): Promise<void> {
-  const session = await getActiveSession(slug);
-  if (!session) return;
-
-  // Best-effort: ask the agent to summarize before we kill the sandbox.
-  // Hard-cap so a slow summary never wedges the End action.
-  if (session.status === "ready") {
-    await writeSessionLog(slug, session.sandboxId).catch(() => {});
-  }
-
-  await client().sandboxes.delete(session.sandboxId).catch(() => {});
-
   const supabase = getAdminClient();
+  const { data: rows } = await supabase
+    .from("sessions")
+    .select("sandbox_id")
+    .eq("project_slug", slug)
+    .in("status", ["ready", "spawning"]);
+  // Mark dead first so any in-flight UI poll sees the change immediately.
   await supabase
     .from("sessions")
     .update({ status: "dead", ended_at: new Date().toISOString() })
     .eq("project_slug", slug)
     .in("status", ["ready", "spawning"]);
+  // Then fire deletes in parallel; wait briefly so we don't leave them
+  // half-open, but don't let one slow delete block the response.
+  await Promise.race([
+    Promise.all(
+      (rows ?? []).map((r) =>
+        r.sandbox_id
+          ? client().sandboxes.delete(r.sandbox_id).catch(() => {})
+          : Promise.resolve(),
+      ),
+    ),
+    new Promise((res) => setTimeout(res, 5_000)),
+  ]);
 }
 
 const SUMMARY_PROMPT = `You are wrapping up a session inside /workspace/project. Write a concise log (UNDER 1800 characters TOTAL) of this session to /home/user/.hub/context.md as plain markdown. Include:

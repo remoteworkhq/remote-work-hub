@@ -154,23 +154,39 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     [upsertSession],
   );
 
-  const end = useCallback(async (slug: string) => {
-    await fetch("/api/sessions/end", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slug }),
-    });
-    setSessions((prev) => {
-      const next = prev.filter((s) => s.slug !== slug);
-      saveCached(next);
-      return next;
-    });
-    setSpawnStates((s) => {
-      const next = { ...s };
-      delete next[slug];
-      return next;
-    });
-  }, []);
+  const end = useCallback(
+    async (slug: string) => {
+      // Optimistic: remove from UI immediately so the hub doesn't keep showing it.
+      const previous = sessions;
+      setSessions((prev) => {
+        const next = prev.filter((s) => s.slug !== slug);
+        saveCached(next);
+        return next;
+      });
+      setSpawnStates((s) => {
+        const next = { ...s };
+        delete next[slug];
+        return next;
+      });
+      try {
+        const r = await fetch("/api/sessions/end", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slug }),
+        });
+        if (!r.ok) {
+          // Roll back on failure
+          setSessions(previous);
+          saveCached(previous);
+          throw new Error(`end failed: ${r.status}`);
+        }
+      } finally {
+        // Always reconcile with server state shortly after
+        void refresh();
+      }
+    },
+    [sessions, refresh],
+  );
 
   const recordThread = useCallback(async (slug: string, threadId: string) => {
     setSessions((prev) => {

@@ -1,10 +1,12 @@
 "use client";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSessions } from "@/components/session-provider";
 import type { ProjectMeta } from "@/lib/projects";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+
+const FRESH_WINDOW_MS = 30_000; // session counts as "just responded" for 30s
 
 function formatRelative(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -19,12 +21,30 @@ function formatRelative(iso: string): string {
 export default function HomeClient({ projects }: { projects: ProjectMeta[] }) {
   const { sessions, end, refresh } = useSessions();
   const [endingSlug, setEndingSlug] = useState<string | null>(null);
+  // Tick state so the glow fades naturally as time passes
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Poll session list every 8s so freshness updates show without manual refresh
+  useEffect(() => {
+    const id = setInterval(() => void refresh(), 8_000);
+    return () => clearInterval(id);
+  }, [refresh]);
 
   const sessionBySlug = useMemo(() => {
     const map: Record<string, (typeof sessions)[number]> = {};
     for (const s of sessions) map[s.slug] = s;
     return map;
   }, [sessions]);
+
+  function isFresh(iso: string | undefined): boolean {
+    if (!iso) return false;
+    return now - new Date(iso).getTime() < FRESH_WINDOW_MS;
+  }
 
   const handleEnd = async (slug: string) => {
     setEndingSlug(slug);
@@ -145,13 +165,16 @@ export default function HomeClient({ projects }: { projects: ProjectMeta[] }) {
           {projects.map((p, idx) => {
             const session = sessionBySlug[p.slug];
             const live = !!session;
+            const fresh = isFresh(session?.lastActiveAt);
             return (
               <Link
                 key={p.slug}
                 href={`/projects/${p.slug}`}
                 className={cn(
-                  "group relative bg-ink hover:bg-ink-2 transition-colors p-7 min-h-[220px] flex flex-col justify-between",
-                  live && "ring-1 ring-inset ring-amber/30",
+                  "group relative bg-ink hover:bg-ink-2 transition-all p-7 min-h-[220px] flex flex-col justify-between",
+                  live && !fresh && "ring-1 ring-inset ring-amber/30",
+                  fresh &&
+                    "ring-1 ring-inset ring-emerald-soft/60 shadow-[0_0_24px_-4px_oklch(0.78_0.13_160_/_0.35)]",
                 )}
               >
                 <div className="flex items-start justify-between">
@@ -161,15 +184,30 @@ export default function HomeClient({ projects }: { projects: ProjectMeta[] }) {
                   <span
                     className={cn(
                       "font-mono text-[10px] uppercase tracking-[0.2em] px-2 py-0.5 flex items-center gap-1.5",
-                      live
-                        ? "text-amber bg-amber-glow"
-                        : "text-paper-faint bg-rule-soft/40",
+                      fresh
+                        ? "text-emerald-soft bg-emerald-soft/[0.12]"
+                        : live
+                          ? "text-amber bg-amber-glow"
+                          : "text-paper-faint bg-rule-soft/40",
                     )}
                   >
-                    {live && (
-                      <span className="w-1 h-1 rounded-full bg-amber pulse-dot" />
+                    {(live || fresh) && (
+                      <span
+                        className={cn(
+                          "w-1 h-1 rounded-full pulse-dot",
+                          fresh ? "bg-emerald-soft" : "bg-amber",
+                        )}
+                        style={
+                          fresh
+                            ? {
+                                boxShadow:
+                                  "0 0 8px oklch(0.78 0.13 160 / 0.7)",
+                              }
+                            : undefined
+                        }
+                      />
                     )}
-                    {live ? "live" : "idle"}
+                    {fresh ? "responded" : live ? "live" : "idle"}
                   </span>
                 </div>
                 <div>
@@ -187,9 +225,11 @@ export default function HomeClient({ projects }: { projects: ProjectMeta[] }) {
                 <div
                   className={cn(
                     "absolute inset-x-0 top-0 h-px transition-colors",
-                    live
-                      ? "bg-amber/60"
-                      : "bg-amber/0 group-hover:bg-amber/60",
+                    fresh
+                      ? "bg-emerald-soft/70"
+                      : live
+                        ? "bg-amber/60"
+                        : "bg-amber/0 group-hover:bg-amber/60",
                   )}
                 />
               </Link>

@@ -197,10 +197,7 @@ function MessageRow({
   const label = isUser ? "you" : "agent";
 
   return (
-    <motion.article
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.18, ease: "easeOut" }}
+    <article
       className={cn(
         "py-6 grid w-full",
         isUser ? "justify-items-end" : "justify-items-start",
@@ -232,7 +229,7 @@ function MessageRow({
           ))}
         </div>
       </div>
-    </motion.article>
+    </article>
   );
 }
 
@@ -323,12 +320,11 @@ export default function AgentChatClient({
     } catch {}
   }, [input, draftKey]);
 
-  // Auto-scroll
+  // Auto-scroll (instant — smooth scroll added perceived lag)
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
   }, [messages.length, status]);
 
   // Hydrate prior messages from 21st thread on mount (so chat persists across nav).
