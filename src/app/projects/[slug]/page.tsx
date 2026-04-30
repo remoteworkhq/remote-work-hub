@@ -1,4 +1,5 @@
 import { AgentClient } from "@21st-sdk/node";
+import Link from "next/link";
 import AgentChatClient from "./agent-chat-client";
 
 type PageProps = { params: Promise<{ slug: string }> };
@@ -12,7 +13,12 @@ const SETUP_WAIT_SECONDS = 30;
 const PROJECT_PATH = "/home/user/workspace/project";
 const READY_PATH = `${PROJECT_PATH}/.hub-ready`;
 
-const NETWORK_ALLOW = ["github.com", "*.github.com", "objects.githubusercontent.com", "codeload.github.com"];
+const NETWORK_ALLOW = [
+  "github.com",
+  "*.github.com",
+  "objects.githubusercontent.com",
+  "codeload.github.com",
+];
 const NETWORK_DENY = ["0.0.0.0/0"];
 
 export default async function ProjectPage({ params }: PageProps) {
@@ -23,20 +29,41 @@ export default async function ProjectPage({ params }: PageProps) {
 
   function ErrorState({ msg, hint }: { msg: string; hint?: string }) {
     return (
-      <main className="min-h-dvh px-6 py-16 max-w-4xl mx-auto">
-        <a href="/" className="text-sm text-zinc-500 hover:text-zinc-300">&larr; Back</a>
-        <h1 className="mt-4 text-3xl font-semibold tracking-tight">{slug}</h1>
-        <div className="mt-6 rounded-lg border border-red-900/60 bg-red-950/30 p-4">
-          <p className="text-sm text-red-300 font-medium">{msg}</p>
-          {hint && <p className="text-xs text-red-400/80 mt-2 whitespace-pre-wrap">{hint}</p>}
+      <main className="min-h-dvh max-w-3xl mx-auto px-8 py-16">
+        <Link
+          href="/"
+          className="font-mono text-[11px] uppercase tracking-[0.28em] text-paper-faint hover:text-amber transition-colors"
+        >
+          ← back
+        </Link>
+        <h1 className="mt-6 font-display text-4xl text-paper">{slug}</h1>
+        <div className="mt-8 border border-rose-soft/40 bg-rose-soft/[0.05] p-5">
+          <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-rose-soft mb-2">
+            error
+          </p>
+          <p className="text-paper">{msg}</p>
+          {hint && (
+            <p className="mt-3 text-sm text-paper-dim whitespace-pre-wrap">
+              {hint}
+            </p>
+          )}
         </div>
       </main>
     );
   }
 
-  if (!apiKey) return <ErrorState msg="Missing API_KEY_21ST env var. Set it in Vercel and redeploy." />;
-  if (!ghToken) return <ErrorState msg="Missing GITHUB_TOKEN env var. Add a PAT with 'repo' scope on remoteworkhq, then redeploy." />;
-  if (!repo) return <ErrorState msg={`No GitHub repo mapped for project "${slug}".`} />;
+  if (!apiKey)
+    return (
+      <ErrorState msg="Missing API_KEY_21ST env var. Set it in Vercel and redeploy." />
+    );
+  if (!ghToken)
+    return (
+      <ErrorState msg="Missing GITHUB_TOKEN env var. Add a classic PAT with 'repo' scope, then redeploy." />
+    );
+  if (!repo)
+    return (
+      <ErrorState msg={`No GitHub repo mapped for project "${slug}".`} />
+    );
 
   const remoteUrl = `https://x-access-token:${ghToken}@github.com/${repo}.git`;
 
@@ -53,7 +80,6 @@ export default async function ProjectPage({ params }: PageProps) {
       `git -C ${PROJECT_PATH} config user.name "Remote Work Hub Agent"`,
       `git -C ${PROJECT_PATH} config user.email "agent@remoteworkhq.local"`,
       `git -C ${PROJECT_PATH} remote set-url origin ${remoteUrl}`,
-      // Make the repo trusted regardless of which uid runs git later (setup vs sandboxes.exec)
       `git config --system --add safe.directory '*' || git config --global --add safe.directory '*'`,
       `touch ${READY_PATH}`,
     ],
@@ -75,18 +101,10 @@ export default async function ProjectPage({ params }: PageProps) {
   }
 
   return (
-    <main className="min-h-dvh px-6 py-10 max-w-4xl mx-auto">
-      <a href="/" className="text-sm text-zinc-500 hover:text-zinc-300">&larr; Back</a>
-      <header className="mt-3 mb-6 flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{slug}</h1>
-          <p className="text-xs text-zinc-500 mt-1">
-            <a className="hover:text-zinc-300" href={`https://github.com/${repo}`} target="_blank" rel="noreferrer">{repo}</a>
-          </p>
-        </div>
-        <span className="text-xs text-zinc-500 font-mono">{sandbox.id}</span>
-      </header>
-      <AgentChatClient sandboxId={sandbox.id} />
-    </main>
+    <AgentChatClient
+      sandboxId={sandbox.id}
+      slug={slug}
+      repo={repo}
+    />
   );
 }

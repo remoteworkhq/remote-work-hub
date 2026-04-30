@@ -1,8 +1,9 @@
 "use client";
-import { AgentChat, createAgentChat } from "@21st-sdk/nextjs";
+import { createAgentChat } from "@21st-sdk/nextjs";
 import { useChat } from "@ai-sdk/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader, Send, Square } from "lucide-react";
+import { ArrowUp, Loader2, Square } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   useCallback,
@@ -14,6 +15,12 @@ import {
 import { cn } from "@/lib/utils";
 
 type PushResult = { exitCode: number; stdout: string; stderr: string };
+
+type Props = {
+  sandboxId: string;
+  slug: string;
+  repo: string;
+};
 
 function useAutoResizeTextarea(min: number, max: number) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -44,43 +51,81 @@ type Part = {
   state?: string;
 };
 
+function ToolCard({ name, cmd, output, state }: {
+  name: string;
+  cmd: string;
+  output: string;
+  state?: string;
+}) {
+  const [open, setOpen] = useState(true);
+  const isRunning = state && state !== "output-available" && state !== "result";
+
+  return (
+    <div className="my-3 border border-rule-soft/60 bg-ink-2/40 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-3 px-3 py-2 hover:bg-ink-3/40 transition-colors text-left"
+      >
+        <span
+          className={cn(
+            "w-1.5 h-1.5 rounded-full shrink-0",
+            isRunning ? "bg-amber pulse-dot" : "bg-emerald-soft/80",
+          )}
+        />
+        <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber/80">
+          {name}
+        </span>
+        <span className="font-mono text-[11px] text-paper-faint flex-1 truncate">
+          {cmd.split("\n")[0].slice(0, 80)}
+        </span>
+        <span className="font-mono text-[10px] text-paper-faint">
+          {open ? "−" : "+"}
+        </span>
+      </button>
+      {open && (
+        <>
+          <pre className="px-3 py-2 font-mono text-[12px] text-paper/90 whitespace-pre-wrap break-all border-t border-rule-soft/40">
+            <span className="text-amber/70">$</span> {cmd}
+          </pre>
+          {output && (
+            <pre className="px-3 py-2 font-mono text-[12px] text-paper-dim whitespace-pre-wrap break-all border-t border-rule-soft/40 max-h-72 overflow-y-auto">
+              {output.slice(0, 8000)}
+            </pre>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function MessagePart({ part }: { part: Part }) {
   if (part.type === "text") {
-    return <p className="whitespace-pre-wrap leading-relaxed">{part.text}</p>;
+    return (
+      <p className="whitespace-pre-wrap leading-relaxed text-paper">
+        {part.text}
+      </p>
+    );
   }
   if (typeof part.type === "string" && part.type.startsWith("tool-")) {
     const name = part.type.slice(5);
     const input = part.input ?? {};
-    const cmd = input.command || JSON.stringify(input);
+    const cmd =
+      typeof input.command === "string" ? input.command : JSON.stringify(input);
     const output = part.output;
     const outputText =
       typeof output === "string"
         ? output
         : output && typeof output === "object"
-          ? (output as { text?: string }).text ?? JSON.stringify(output)
+          ? (output as { text?: string }).text ?? JSON.stringify(output, null, 2)
           : "";
-    const state = part.state;
     return (
-      <div className="my-2 rounded-md border border-white/[0.05] bg-black/30 overflow-hidden text-xs">
-        <div className="px-3 py-1.5 border-b border-white/[0.05] flex items-center gap-2 text-white/60">
-          <span className="font-mono text-[10px] uppercase tracking-wider">
-            {name}
-          </span>
-          {state && state !== "output-available" && (
-            <span className="text-white/40 text-[10px]">{state}</span>
-          )}
-        </div>
-        {cmd && (
-          <pre className="px-3 py-2 font-mono text-white/80 whitespace-pre-wrap break-all">
-            $ {cmd}
-          </pre>
-        )}
-        {outputText && (
-          <pre className="px-3 py-2 border-t border-white/[0.05] font-mono text-white/60 whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
-            {outputText.slice(0, 4000)}
-          </pre>
-        )}
-      </div>
+      <ToolCard
+        name={name}
+        cmd={cmd}
+        output={outputText}
+        state={part.state}
+      />
     );
   }
   return null;
@@ -92,54 +137,92 @@ type UIMessage = {
   parts?: Part[];
 };
 
-function MessageBubble({ message }: { message: UIMessage }) {
+function MessageRow({
+  message,
+  index,
+}: {
+  message: UIMessage;
+  index: number;
+}) {
   const isUser = message.role === "user";
   const parts = message.parts ?? [];
+  const label = isUser ? "you" : "agent";
 
+  return (
+    <motion.article
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+      className={cn(
+        "py-6 grid w-full",
+        isUser ? "justify-items-end" : "justify-items-start",
+      )}
+    >
+      <div
+        className={cn(
+          "w-full max-w-[68ch]",
+          isUser
+            ? "border-r-2 border-amber/60 pr-5 text-right"
+            : "border-l-2 border-amber/40 pl-5",
+        )}
+      >
+        <div
+          className={cn(
+            "flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.28em]",
+            isUser ? "justify-end text-amber/80" : "justify-start text-amber/80",
+          )}
+        >
+          <span>{label}</span>
+          <span className="text-paper-faint">·</span>
+          <span className="text-paper-faint tabular-nums">
+            {String(index + 1).padStart(2, "0")}
+          </span>
+        </div>
+        <div className={cn("mt-3 space-y-2 text-[15px]", isUser && "text-right")}>
+          {parts.map((p, i) => (
+            <MessagePart key={i} part={p} />
+          ))}
+        </div>
+      </div>
+    </motion.article>
+  );
+}
+
+function ThinkingRow() {
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
-      className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}
+      exit={{ opacity: 0 }}
+      className="py-6 grid justify-items-start"
     >
-      <div
-        className={cn(
-          "max-w-[85%] rounded-2xl px-4 py-3 text-sm",
-          isUser
-            ? "bg-white text-zinc-900 rounded-br-md"
-            : "bg-white/[0.04] border border-white/[0.05] text-white/90 rounded-bl-md",
-        )}
-      >
-        {parts.map((p, i) => (
-          <MessagePart key={i} part={p} />
-        ))}
+      <div className="border-l-2 border-amber/40 pl-5 max-w-[68ch]">
+        <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-amber/80">
+          agent
+        </div>
+        <div className="mt-3 flex items-center gap-2 text-paper-dim text-sm">
+          <span className="italic font-display">thinking</span>
+          <span className="flex gap-1">
+            {[0, 1, 2].map((i) => (
+              <motion.span
+                key={i}
+                className="w-1 h-1 rounded-full bg-amber/70"
+                animate={{ opacity: [0.3, 1, 0.3] }}
+                transition={{
+                  duration: 1.2,
+                  repeat: Infinity,
+                  delay: i * 0.15,
+                }}
+              />
+            ))}
+          </span>
+        </div>
       </div>
     </motion.div>
   );
 }
 
-function TypingDots() {
-  return (
-    <div className="flex items-center gap-1 px-1 py-1">
-      {[0, 1, 2].map((i) => (
-        <motion.span
-          key={i}
-          className="w-1.5 h-1.5 bg-white/70 rounded-full"
-          animate={{ opacity: [0.3, 0.9, 0.3], scale: [0.85, 1.1, 0.85] }}
-          transition={{
-            duration: 1.2,
-            repeat: Infinity,
-            delay: i * 0.15,
-            ease: "easeInOut",
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
+export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
   const router = useRouter();
   const [ending, setEnding] = useState(false);
   const [pushing, setPushing] = useState(false);
@@ -150,7 +233,7 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
   const lastAutoPushedAtRef = useRef<number>(0);
   const prevStatusRef = useRef<string>("ready");
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { ref: textareaRef, adjust } = useAutoResizeTextarea(60, 200);
+  const { ref: textareaRef, adjust } = useAutoResizeTextarea(56, 200);
 
   const chat = useMemo(
     () =>
@@ -164,6 +247,7 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
 
   const { messages, status, stop, error, sendMessage } = useChat({ chat });
 
+  // Auto-scroll to latest
   useEffect(() => {
     scrollRef.current?.scrollTo({
       top: scrollRef.current.scrollHeight,
@@ -171,6 +255,7 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
     });
   }, [messages.length, status]);
 
+  // Sandbox cleanup on close
   useEffect(() => {
     const beacon = () => {
       if (closedRef.current) return;
@@ -219,6 +304,7 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
     [sandboxId],
   );
 
+  // Auto-push when streaming -> ready
   useEffect(() => {
     const prev = prevStatusRef.current;
     prevStatusRef.current = status;
@@ -246,7 +332,7 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
 
   const submit = () => {
     const text = input.trim();
-    if (!text || status === "streaming") return;
+    if (!text || status === "streaming" || status === "submitted") return;
     void sendMessage({ text });
     setInput("");
     adjust(true);
@@ -261,98 +347,173 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
 
   const pushOk = pushResult?.exitCode === 0;
   const isStreaming = status === "streaming";
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const _AgentChat = AgentChat;
+  const isSubmitted = status === "submitted";
+  const lastMsg = messages[messages.length - 1];
+  // Show thinking only when waiting and last message is from user
+  // (avoids duplicating with the streaming assistant bubble)
+  const showThinking = isSubmitted && lastMsg?.role === "user";
+  const sandboxShort = sandboxId.split("-")[0];
 
   return (
-    <div className="relative">
-      <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-violet-500/[0.06] rounded-full blur-[128px] animate-pulse" />
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-indigo-500/[0.06] rounded-full blur-[128px] animate-pulse [animation-delay:700ms]" />
-      </div>
+    <div className="min-h-dvh flex flex-col">
+      {/* HEADER */}
+      <header className="border-b border-rule-soft/60 sticky top-0 z-20 backdrop-blur-xl bg-ink/70">
+        <div className="max-w-[1280px] mx-auto px-6 lg:px-10 py-5 flex items-center gap-6">
+          <Link
+            href="/"
+            className="font-mono text-[10px] uppercase tracking-[0.28em] text-paper-faint hover:text-amber transition-colors shrink-0"
+          >
+            ← hub
+          </Link>
+          <div className="h-8 w-px bg-rule-soft" />
+          <div className="flex-1 min-w-0">
+            <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-amber/80">
+              project
+            </p>
+            <h1 className="mt-0.5 font-display text-2xl text-paper truncate">
+              {slug}
+            </h1>
+          </div>
+          <div className="hidden md:flex items-center gap-6 shrink-0">
+            <a
+              href={`https://github.com/${repo}`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-right group"
+            >
+              <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-paper-faint group-hover:text-amber transition-colors">
+                repo
+              </p>
+              <p className="mt-0.5 font-mono text-xs text-paper-dim group-hover:text-paper transition-colors">
+                {repo}
+              </p>
+            </a>
+            <div className="text-right">
+              <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-paper-faint">
+                sandbox
+              </p>
+              <p className="mt-0.5 font-mono text-xs text-paper-dim flex items-center gap-1.5 justify-end">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-soft pulse-dot" />
+                {sandboxShort}…
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => runPush(false)}
+              disabled={pushing}
+              title="Push (auto-push runs after each agent turn)"
+              className="font-mono text-[11px] uppercase tracking-[0.2em] px-3 py-2 bg-amber text-ink hover:bg-amber-2 transition-colors disabled:opacity-50"
+            >
+              {pushing ? "pushing…" : "push"}
+            </button>
+            <button
+              type="button"
+              onClick={handleEnd}
+              disabled={ending}
+              className="font-mono text-[11px] uppercase tracking-[0.2em] px-3 py-2 border border-rule hover:border-amber/60 hover:text-amber transition-colors disabled:opacity-50"
+            >
+              {ending ? "ending…" : "end"}
+            </button>
+          </div>
+        </div>
+      </header>
 
-      <div className="flex justify-between items-center mb-3 gap-2">
-        <button
-          type="button"
-          onClick={() => runPush(false)}
-          disabled={pushing}
-          title="Manual push (auto-push runs after each agent turn)"
-          className="text-sm rounded-md bg-white text-zinc-900 px-3 py-1.5 font-medium hover:bg-white/90 transition disabled:opacity-50 shadow-lg shadow-white/5"
-        >
-          {pushing ? "Pushing..." : "Push to GitHub"}
-        </button>
-        <button
-          type="button"
-          onClick={handleEnd}
-          disabled={ending}
-          className="text-sm rounded-md border border-white/[0.08] px-3 py-1.5 hover:border-white/[0.2] hover:bg-white/[0.04] transition disabled:opacity-50"
-        >
-          {ending ? "Ending..." : "End session"}
-        </button>
-      </div>
-
+      {/* PUSH RESULT */}
       <AnimatePresence>
         {pushResult && (
           <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
             className={cn(
-              "mb-3 rounded-md border p-3 text-xs font-mono whitespace-pre-wrap",
+              "border-b overflow-hidden",
               pushOk
-                ? "border-emerald-900/60 bg-emerald-950/30 text-emerald-300"
-                : "border-red-900/60 bg-red-950/30 text-red-300",
+                ? "border-emerald-soft/40 bg-emerald-soft/[0.05]"
+                : "border-rose-soft/40 bg-rose-soft/[0.05]",
             )}
           >
-            {pushOk ? "✓ pushed\n\n" : `✗ exit ${pushResult.exitCode}\n\n`}
-            {pushResult.stdout}
-            {pushResult.stderr && `\n${pushResult.stderr}`}
+            <div className="max-w-[1280px] mx-auto px-6 lg:px-10 py-3 flex items-start gap-4">
+              <span
+                className={cn(
+                  "font-mono text-[10px] uppercase tracking-[0.28em] mt-0.5 shrink-0",
+                  pushOk ? "text-emerald-soft" : "text-rose-soft",
+                )}
+              >
+                {pushOk ? "✓ pushed" : `✗ exit ${pushResult.exitCode}`}
+              </span>
+              <pre className="font-mono text-[11px] text-paper-dim whitespace-pre-wrap break-all flex-1">
+                {pushResult.stdout}
+                {pushResult.stderr && `\n${pushResult.stderr}`}
+              </pre>
+              <button
+                type="button"
+                onClick={() => setPushResult(null)}
+                className="font-mono text-[10px] uppercase tracking-[0.2em] text-paper-faint hover:text-paper transition-colors shrink-0"
+              >
+                dismiss
+              </button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="rounded-2xl border border-white/[0.05] bg-white/[0.02] backdrop-blur-2xl shadow-2xl overflow-hidden flex flex-col h-[60vh] min-h-[400px]">
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-          {messages.length === 0 && (
-            <div className="h-full flex items-center justify-center text-center">
-              <div>
-                <h2 className="text-lg font-medium tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white/90 to-white/40">
-                  Sandbox ready
-                </h2>
-                <p className="text-sm text-white/40 mt-1">
-                  Ask the agent to make a code change.
-                </p>
-              </div>
+      {/* CHAT FEED — full width, scroll inside */}
+      <section
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto"
+      >
+        <div className="max-w-[1280px] mx-auto px-6 lg:px-10 divide-y divide-rule-soft/30">
+          {messages.length === 0 && !showThinking && (
+            <div className="py-24 text-center">
+              <p className="font-mono text-[10px] uppercase tracking-[0.32em] text-amber/80">
+                ready
+              </p>
+              <h2 className="mt-3 font-display text-3xl italic text-paper-dim">
+                What should the agent do?
+              </h2>
+              <p className="mt-3 text-sm text-paper-faint max-w-md mx-auto">
+                Sandbox spun up, repo cloned to{" "}
+                <code className="font-mono text-paper-dim">./project</code>.
+                Anything you commit auto-pushes when the turn finishes.
+              </p>
             </div>
           )}
-          {messages.map((m) => (
-            <MessageBubble key={m.id} message={m as unknown as UIMessage} />
+          {messages.map((m, i) => (
+            <MessageRow
+              key={m.id}
+              message={m as unknown as UIMessage}
+              index={i}
+            />
           ))}
-          {isStreaming && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex justify-start"
-            >
-              <div className="bg-white/[0.04] border border-white/[0.05] rounded-2xl rounded-bl-md px-4 py-3">
-                <TypingDots />
-              </div>
-            </motion.div>
-          )}
+          <AnimatePresence>{showThinking && <ThinkingRow />}</AnimatePresence>
           {error && (
-            <div className="rounded-md border border-red-900/40 bg-red-950/30 p-3 text-xs text-red-300">
-              {error.message}
+            <div className="py-6 max-w-[68ch]">
+              <div className="border-l-2 border-rose-soft pl-5">
+                <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-rose-soft">
+                  error
+                </p>
+                <p className="mt-2 text-sm text-paper-dim">{error.message}</p>
+              </div>
             </div>
           )}
+          <div className="h-32" />
         </div>
+      </section>
 
-        <div
-          className={cn(
-            "border-t border-white/[0.05] transition-colors",
-            inputFocused && "bg-white/[0.01]",
-          )}
-        >
-          <div className="p-3">
+      {/* INPUT DOCK */}
+      <div className="sticky bottom-0 z-10 border-t border-rule-soft/60 bg-ink/85 backdrop-blur-xl">
+        <div className="max-w-[1280px] mx-auto px-6 lg:px-10 py-4">
+          <div
+            className={cn(
+              "flex items-end gap-3 border bg-ink-2/40 transition-colors",
+              inputFocused ? "border-amber/40" : "border-rule",
+            )}
+          >
+            <div className="font-mono text-amber/80 text-sm pl-4 pt-4 select-none">
+              ›
+            </div>
             <textarea
               ref={textareaRef}
               value={input}
@@ -363,46 +524,63 @@ export default function AgentChatClient({ sandboxId }: { sandboxId: string }) {
               onKeyDown={onKeyDown}
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
-              placeholder="Ask the agent..."
-              className="w-full resize-none bg-transparent border-none text-white/90 text-sm placeholder:text-white/30 focus:outline-none min-h-[60px]"
+              placeholder="Tell the agent what to change…"
+              className="flex-1 resize-none bg-transparent border-none text-paper text-[15px] placeholder:text-paper-faint focus:outline-none py-4 min-h-[56px]"
               style={{ overflow: "hidden" }}
             />
+            <div className="p-2">
+              {isStreaming ? (
+                <motion.button
+                  type="button"
+                  onClick={() => stop()}
+                  whileTap={{ scale: 0.96 }}
+                  className="px-3 py-2 font-mono text-[11px] uppercase tracking-[0.2em] bg-rule text-paper hover:bg-rule-soft transition-colors flex items-center gap-2"
+                >
+                  <Square className="w-3 h-3" />
+                  stop
+                </motion.button>
+              ) : (
+                <motion.button
+                  type="button"
+                  onClick={submit}
+                  whileTap={{ scale: 0.96 }}
+                  disabled={!input.trim() || isSubmitted}
+                  className={cn(
+                    "px-4 py-2 font-mono text-[11px] uppercase tracking-[0.2em] flex items-center gap-2 transition-all",
+                    input.trim() && !isSubmitted
+                      ? "bg-amber text-ink hover:bg-amber-2"
+                      : "bg-rule-soft text-paper-faint",
+                  )}
+                >
+                  {isSubmitted ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <ArrowUp className="w-3.5 h-3.5" />
+                  )}
+                  send
+                </motion.button>
+              )}
+            </div>
           </div>
-          <div className="px-3 pb-3 flex items-center justify-between">
-            <span className="text-[11px] text-white/30">
-              Enter to send · Shift+Enter for newline
-            </span>
-            {isStreaming ? (
-              <motion.button
-                type="button"
-                onClick={() => stop()}
-                whileTap={{ scale: 0.96 }}
-                className="px-3 py-1.5 rounded-md text-xs font-medium bg-white/[0.06] text-white/70 hover:bg-white/[0.1] flex items-center gap-2"
-              >
-                <Square className="w-3 h-3" />
-                Stop
-              </motion.button>
-            ) : (
-              <motion.button
-                type="button"
-                onClick={submit}
-                whileTap={{ scale: 0.96 }}
-                disabled={!input.trim()}
+          <div className="mt-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.22em] text-paper-faint">
+            <span>enter sends · shift+enter newline</span>
+            <span className="flex items-center gap-2">
+              <span
                 className={cn(
-                  "px-4 py-1.5 rounded-md text-sm font-medium flex items-center gap-2 transition-all",
-                  input.trim()
-                    ? "bg-white text-zinc-900 shadow-lg shadow-white/10"
-                    : "bg-white/[0.05] text-white/40",
+                  "w-1.5 h-1.5 rounded-full",
+                  isStreaming
+                    ? "bg-amber pulse-dot"
+                    : isSubmitted
+                      ? "bg-amber pulse-dot"
+                      : "bg-emerald-soft/70",
                 )}
-              >
-                {status === "submitted" ? (
-                  <Loader className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Send className="w-3.5 h-3.5" />
-                )}
-                Send
-              </motion.button>
-            )}
+              />
+              {isStreaming
+                ? "streaming"
+                : isSubmitted
+                  ? "queued"
+                  : "ready"}
+            </span>
           </div>
         </div>
       </div>

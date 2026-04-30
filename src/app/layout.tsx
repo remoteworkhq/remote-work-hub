@@ -1,5 +1,32 @@
 import type { Metadata } from "next";
+import {
+  Newsreader,
+  IBM_Plex_Sans,
+  IBM_Plex_Mono,
+} from "next/font/google";
 import "./globals.css";
+
+const display = Newsreader({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  style: ["normal", "italic"],
+  variable: "--font-display",
+  display: "swap",
+});
+
+const sans = IBM_Plex_Sans({
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600"],
+  variable: "--font-sans",
+  display: "swap",
+});
+
+const mono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Remote Work Hub",
@@ -10,8 +37,51 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className="dark">
-      <body className="bg-zinc-950 text-zinc-100 antialiased">{children}</body>
+    <html
+      lang="en"
+      className={`dark ${display.variable} ${sans.variable} ${mono.variable}`}
+    >
+      <body className="min-h-dvh bg-ink text-paper antialiased">
+        {/* Ambient background — fixed, behind everything */}
+        <div
+          aria-hidden
+          className="fixed inset-0 -z-10 overflow-hidden pointer-events-none"
+        >
+          {/* Vignette gradient mesh */}
+          <div
+            className="absolute -top-[40vh] -left-[30vw] w-[80vw] h-[80vw] rounded-full opacity-70"
+            style={{
+              background:
+                "radial-gradient(closest-side, oklch(0.82 0.14 65 / 0.10), transparent 70%)",
+            }}
+          />
+          <div
+            className="absolute -bottom-[40vh] -right-[30vw] w-[80vw] h-[80vw] rounded-full opacity-60"
+            style={{
+              background:
+                "radial-gradient(closest-side, oklch(0.55 0.13 250 / 0.10), transparent 70%)",
+            }}
+          />
+          <div
+            className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[40vw] h-[40vw] rounded-full opacity-40"
+            style={{
+              background:
+                "radial-gradient(closest-side, oklch(0.78 0.13 160 / 0.05), transparent 70%)",
+            }}
+          />
+          {/* Subtle grain */}
+          <div className="absolute inset-0 bg-grain opacity-[0.07] mix-blend-overlay" />
+          {/* Top edge highlight */}
+          <div
+            className="absolute inset-x-0 top-0 h-px"
+            style={{
+              background:
+                "linear-gradient(to right, transparent, oklch(0.82 0.14 65 / 0.4) 30%, oklch(0.82 0.14 65 / 0.4) 70%, transparent)",
+            }}
+          />
+        </div>
+        {children}
+      </body>
     </html>
   );
 }
