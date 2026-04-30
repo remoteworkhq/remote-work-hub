@@ -150,9 +150,9 @@ function MessageRow({
 
   return (
     <motion.article
-      initial={{ opacity: 0, y: 12 }}
+      initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+      transition={{ duration: 0.18, ease: "easeOut" }}
       className={cn(
         "py-6 grid w-full",
         isUser ? "justify-items-end" : "justify-items-start",
@@ -227,6 +227,7 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
   const [ending, setEnding] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [pushResult, setPushResult] = useState<PushResult | null>(null);
+  const [autoPush, setAutoPush] = useState(true);
   const [input, setInput] = useState("");
   const [inputFocused, setInputFocused] = useState(false);
   const closedRef = useRef(false);
@@ -304,18 +305,41 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
     [sandboxId],
   );
 
-  // Auto-push when streaming -> ready
+  // Auto-push when streaming -> ready (only if toggle on AND last assistant
+  // message looks like it touched the repo — heuristic, but avoids waking the
+  // sandbox after every chitchat reply).
   useEffect(() => {
     const prev = prevStatusRef.current;
     prevStatusRef.current = status;
-    if (prev === "streaming" && status === "ready" && messages.length > 0) {
+    if (
+      autoPush &&
+      prev === "streaming" &&
+      status === "ready" &&
+      messages.length > 0
+    ) {
+      const last = messages[messages.length - 1] as unknown as UIMessage;
+      const text = (last?.parts ?? [])
+        .map((p) => {
+          if (p.type === "text") return p.text ?? "";
+          if (typeof p.type === "string" && p.type.startsWith("tool-")) {
+            const cmd = (p.input as { command?: string } | undefined)?.command ?? "";
+            return cmd;
+          }
+          return "";
+        })
+        .join(" ")
+        .toLowerCase();
+      const touchedRepo = /\bcommit\b|\bgit\s+(?:add|commit|push|merge|rebase)\b|\b(?:wrote|edited|modified|created|deleted|updated)\b/.test(
+        text,
+      );
+      if (!touchedRepo) return;
       const now = Date.now();
       if (now - lastAutoPushedAtRef.current > 2000) {
         lastAutoPushedAtRef.current = now;
         void runPush(true);
       }
     }
-  }, [status, messages.length, runPush]);
+  }, [status, messages.length, runPush, autoPush]);
 
   const handleEnd = async () => {
     if (closedRef.current) {
@@ -348,10 +372,15 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
   const pushOk = pushResult?.exitCode === 0;
   const isStreaming = status === "streaming";
   const isSubmitted = status === "submitted";
-  const lastMsg = messages[messages.length - 1];
-  // Show thinking only when waiting and last message is from user
-  // (avoids duplicating with the streaming assistant bubble)
-  const showThinking = isSubmitted && lastMsg?.role === "user";
+  const lastMsg = messages[messages.length - 1] as unknown as UIMessage | undefined;
+  const lastAssistantHasText = (lastMsg?.parts ?? []).some(
+    (p) => p.type === "text" && (p.text ?? "").length > 0,
+  );
+  // Show thinking when waiting OR when streaming has started but no text chunk
+  // has arrived yet (covers the silent gap between submit and first token).
+  const showThinking =
+    (isSubmitted && lastMsg?.role === "user") ||
+    (isStreaming && (lastMsg?.role !== "assistant" || !lastAssistantHasText));
   const sandboxShort = sandboxId.split("-")[0];
 
   return (
@@ -401,9 +430,28 @@ export default function AgentChatClient({ sandboxId, slug, repo }: Props) {
           <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
+              onClick={() => setAutoPush((v) => !v)}
+              title={autoPush ? "Auto-push is on after each turn" : "Auto-push is off — use the Push button manually"}
+              className={cn(
+                "font-mono text-[11px] uppercase tracking-[0.2em] px-3 py-2 border transition-colors flex items-center gap-2",
+                autoPush
+                  ? "border-amber/40 text-amber"
+                  : "border-rule text-paper-faint hover:border-paper-faint",
+              )}
+            >
+              <span
+                className={cn(
+                  "w-1.5 h-1.5 rounded-full",
+                  autoPush ? "bg-amber pulse-dot" : "bg-paper-faint/60",
+                )}
+              />
+              auto
+            </button>
+            <button
+              type="button"
               onClick={() => runPush(false)}
               disabled={pushing}
-              title="Push (auto-push runs after each agent turn)"
+              title="Push manually now"
               className="font-mono text-[11px] uppercase tracking-[0.2em] px-3 py-2 bg-amber text-ink hover:bg-amber-2 transition-colors disabled:opacity-50"
             >
               {pushing ? "pushing…" : "push"}
