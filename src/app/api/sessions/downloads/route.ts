@@ -26,8 +26,8 @@ export async function POST(request: NextRequest) {
     const r = await c.sandboxes.exec({
       sandboxId: session.sandboxId,
       command:
-        `mkdir -p /home/user/downloads && ` +
-        `find /home/user/downloads -maxdepth 1 -type f -printf '%f\\t%s\\t%T@\\n' | sort -k3 -n`,
+        `mkdir -p /home/user/workspace/downloads && ` +
+        `find /home/user/workspace/downloads -maxdepth 1 -type f -printf '%f\\t%s\\t%T@\\n' | sort -k3 -n`,
       timeoutMs: 8_000,
     });
     if (r.exitCode !== 0) {
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
           name,
           size: parseInt(size, 10) || 0,
           mtime: ts ? Math.floor(parseFloat(ts) * 1000) : 0,
-          path: `/home/user/downloads/${name}`,
+          path: `/home/user/workspace/downloads/${name}`,
         };
       });
     return NextResponse.json({ files });

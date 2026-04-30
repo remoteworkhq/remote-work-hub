@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     const buf = Buffer.from(await file.arrayBuffer());
     const b64 = buf.toString("base64");
     const filename = safeName(file.name);
-    const dest = `/home/user/uploads/${filename}`;
+    const dest = `/home/user/workspace/uploads/${filename}`;
     // Random staging name to avoid clashes if user uploads in parallel
     const staging = `/tmp/upload_${Date.now()}_${Math.random().toString(36).slice(2)}.b64`;
 
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
     const r = await c.sandboxes.exec({
       sandboxId: session.sandboxId,
       command:
-        `mkdir -p /home/user/uploads && ` +
+        `mkdir -p /home/user/workspace/uploads && ` +
         `base64 -d '${staging}' > '${dest}' && ` +
         `chmod 644 '${dest}' && ` +
         `rm -f '${staging}' && ` +

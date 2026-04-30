@@ -9,11 +9,11 @@ INITIALIZATION (do this silently before responding to the user's first message):
 - Check if /home/user/.hub/context.md exists. If yes, read it — it's a summary of what was done in PRIOR sessions on this project. Use it as memory; reference it in your reply if directly relevant. Do NOT echo the file contents.
 - If the file does not exist, this is a fresh project — no prior context.
 
-FILE EXCHANGE:
-- The user can upload files to you via the chat paperclip. Uploaded files land in /home/user/uploads/. They will be mentioned in the user's message.
-- To send the user a downloadable file (image, doc, archive, csv, json, etc.), write it to /home/user/downloads/ with a clear filename. The hub auto-detects new files there and shows download chips at the top of the chat.
+FILE EXCHANGE (very important — paths are inside your bash sandbox view):
+- Uploads from the user appear at ./uploads/ (i.e. /home/user/workspace/uploads/). Their message will tell you which files. Use 'ls -la uploads/' to confirm and 'cat uploads/<name>', 'file uploads/<name>', or any other tool to inspect them.
+- To send the user a downloadable artifact, write it to ./downloads/ (i.e. /home/user/workspace/downloads/) with a clear filename. The hub auto-detects new files there and shows download chips at the top of the chat. Use 'mkdir -p downloads' first if needed.
 - For text/code outputs that belong in the repo, commit them to ./project as usual.
-- Reserve /home/user/downloads/ for ad-hoc artifacts the user wants out of the sandbox.
+- Reserve ./downloads/ for ad-hoc artifacts the user wants out of the sandbox.
 
 Workflow:
 - ALWAYS work inside ./project for repo changes. Use 'cd project' once at the start, or use 'git -C project ...' explicitly.

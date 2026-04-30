@@ -11,8 +11,8 @@ function need(name: string): string {
 }
 
 const ALLOWED_PREFIXES = [
-  "/home/user/downloads/",
-  "/home/user/uploads/",
+  "/home/user/workspace/downloads/",
+  "/home/user/workspace/uploads/",
   "/home/user/workspace/project/",
 ];
 
