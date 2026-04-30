@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useSessions } from "@/components/session-provider";
 import AgentChatClient from "./agent-chat-client";
 
@@ -15,23 +15,12 @@ export default function ProjectShell({
   const session = getSession(slug);
   const state = spawnStates[slug];
   const error = errors[slug];
-  const [pollTick, setPollTick] = useState(0);
 
-  // Trigger spawn on mount (idempotent on backend).
   useEffect(() => {
-    if (!session && state !== "spawning") {
-      void getOrCreate(slug).catch(() => {
-        // error surfaced via context
-      });
+    if (!session && state !== "spawning" && state !== "preparing") {
+      void getOrCreate(slug).catch(() => {});
     }
   }, [slug, session, state, getOrCreate]);
-
-  // While spawning, light heartbeat so UI re-renders if the spawn succeeds via another tab
-  useEffect(() => {
-    if (session) return;
-    const id = setInterval(() => setPollTick((t) => t + 1), 1500);
-    return () => clearInterval(id);
-  }, [session]);
 
   if (error) {
     return (
@@ -60,18 +49,24 @@ export default function ProjectShell({
     );
   }
 
-  if (!session) {
+  if (!session || session.status !== "ready") {
+    const phase =
+      state === "preparing" || session?.status === "spawning"
+        ? "cloning repo"
+        : "spinning up";
     return (
       <main className="min-h-dvh flex items-center justify-center">
         <div className="text-center">
           <p className="font-mono text-[10px] uppercase tracking-[0.32em] text-amber/80">
-            spinning up
+            {phase}
           </p>
           <h1 className="mt-3 font-display text-3xl italic text-paper">
             {slug}
           </h1>
           <p className="mt-2 text-sm text-paper-dim">
-            cloning {repo} into a fresh sandbox…
+            {phase === "cloning repo"
+              ? `pulling ${repo} into the sandbox…`
+              : `requesting a fresh sandbox…`}
           </p>
           <div className="mt-6 flex justify-center gap-1.5" aria-hidden>
             {[0, 1, 2].map((i) => (
@@ -84,7 +79,6 @@ export default function ProjectShell({
               />
             ))}
           </div>
-          <span className="hidden">{pollTick}</span>
         </div>
       </main>
     );

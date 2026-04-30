@@ -19,7 +19,7 @@ export type Session = {
   lastActiveAt: string;
 };
 
-type SpawnState = "idle" | "spawning" | "ready" | "error";
+type SpawnState = "idle" | "spawning" | "preparing" | "ready" | "error";
 
 type Ctx = {
   sessions: Session[];
@@ -53,9 +53,30 @@ function saveCached(sessions: Session[]) {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
-  } catch {
-    // ignore quota/serialization errors
+  } catch {}
+}
+
+async function pollUntilReady(slug: string, signal: AbortSignal): Promise<Session> {
+  // Poll /api/sessions/check up to ~45s
+  for (let i = 0; i < 22; i++) {
+    if (signal.aborted) throw new Error("cancelled");
+    await new Promise((r) => setTimeout(r, i === 0 ? 500 : 2000));
+    if (signal.aborted) throw new Error("cancelled");
+    const r = await fetch("/api/sessions/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug }),
+    });
+    if (!r.ok) continue;
+    const data = await r.json();
+    if (data?.status === "ready" && data?.session) {
+      return data.session as Session;
+    }
+    if (data?.status === "missing") {
+      throw new Error("Session disappeared during spawn");
+    }
   }
+  throw new Error("Spawn timed out waiting for workspace clone (45s)");
 }
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
@@ -63,6 +84,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [spawnStates, setSpawnStates] = useState<Record<string, SpawnState>>({});
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const inFlightRef = useRef<Record<string, Promise<Session> | undefined>>({});
+
+  const upsertSession = useCallback((session: Session) => {
+    setSessions((prev) => {
+      const without = prev.filter((s) => s.slug !== session.slug);
+      const next = [session, ...without];
+      saveCached(next);
+      return next;
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     const r = await fetch("/api/sessions");
@@ -81,10 +111,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const getOrCreate = useCallback(
     async (slug: string): Promise<Session> => {
-      // De-dupe concurrent requests for the same slug
       const existingPromise = inFlightRef.current[slug];
       if (existingPromise) return existingPromise;
 
+      const ctrl = new AbortController();
       const promise = (async (): Promise<Session> => {
         setSpawnStates((s) => ({ ...s, [slug]: "spawning" }));
         setErrors((e) => ({ ...e, [slug]: null }));
@@ -98,13 +128,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           if (!r.ok || !data.session) {
             throw new Error(data.error || "spawn failed");
           }
-          const session: Session = data.session;
-          setSessions((prev) => {
-            const without = prev.filter((s) => s.slug !== slug);
-            const next = [session, ...without];
-            saveCached(next);
-            return next;
-          });
+          let session: Session = data.session;
+          upsertSession(session);
+
+          if (session.status !== "ready") {
+            setSpawnStates((s) => ({ ...s, [slug]: "preparing" }));
+            session = await pollUntilReady(slug, ctrl.signal);
+            upsertSession(session);
+          }
+
           setSpawnStates((s) => ({ ...s, [slug]: "ready" }));
           return session;
         } catch (e) {
@@ -119,7 +151,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       inFlightRef.current[slug] = promise;
       return promise;
     },
-    [],
+    [upsertSession],
   );
 
   const end = useCallback(async (slug: string) => {

@@ -1,8 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { startSpawn } from "@/lib/sessions";
+import { finalizeSpawn } from "@/lib/sessions";
 
-// Vercel Pro / Fluid Compute will honor up to 60s. Hobby caps at 10s.
-export const maxDuration = 60;
+export const maxDuration = 30;
 
 export async function POST(request: NextRequest) {
   try {
@@ -11,11 +10,11 @@ export async function POST(request: NextRequest) {
     if (typeof slug !== "string" || !slug) {
       return NextResponse.json({ error: "slug required" }, { status: 400 });
     }
-    const session = await startSpawn(slug);
-    return NextResponse.json({ session });
+    const result = await finalizeSpawn(slug);
+    return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json(
-      { error: e instanceof Error ? e.message : "spawn failed" },
+      { error: e instanceof Error ? e.message : "check failed" },
       { status: 500 },
     );
   }
