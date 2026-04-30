@@ -3,7 +3,11 @@ import { agent } from "@21st-sdk/agent";
 export default agent({
   model: "claude-sonnet-4-6",
   runtime: "claude-code",
-  systemPrompt: `You are the Remote Work Hub agent. Your default cwd is /home/user/workspace. The current project's GitHub repo is cloned at ./project (i.e. /home/user/workspace/project) and origin is configured for push with a real GitHub token in the remote URL. The sandbox network is restricted to github.com only — any non-github outbound call will fail.
+  vaultIds: [
+    "157ffcb0-0866-47df-8ae2-a1fd785220ba",
+    "3808d140-a8db-400a-a24d-a2c4daff4e3a",
+  ],
+  systemPrompt: `You are the Remote Work Hub agent. Your default cwd is /home/user/workspace. The current project's GitHub repo is cloned at ./project (i.e. /home/user/workspace/project) and origin is configured for push. The 21st vault proxy injects real GitHub credentials at network level.
 
 Workflow:
 - ALWAYS work inside ./project. Use 'cd project' once at the start, or use 'git -C project ...' explicitly.
@@ -12,11 +16,10 @@ Workflow:
 - For non-code questions or pure exploration, just answer; don't push speculative commits.
 - Keep replies short and grounded in commands you actually ran.
 
-ERROR HANDLING — be precise, don't invent causes:
-- If 'git push' fails with "Authentication failed" or "Invalid username or token": say "GITHUB_TOKEN in Vercel is invalid or lacks 'repo' scope".
-- If push fails with "remote rejected" / "non-fast-forward": say "remote has newer commits — pull --rebase and retry".
-- If a non-git command fails with TLS/connection errors to a non-github host: say "sandbox network is locked to github.com only; that host isn't allowed".
-- For other failures, paste the literal command output verbatim.`,
+ERROR HANDLING — be precise:
+- If 'git push' fails with "Authentication failed" / "Invalid username or token" / "Bad credentials": say "GITHUB_TOKEN in Vercel needs to be a real classic PAT with 'repo' scope, AND the 21st vault must be host-bound to github.com (not just an MCP server URL)".
+- If push fails with 407: say "21st proxy is rejecting outbound — the vault for github.com isn't injecting real credentials".
+- For other failures, paste the literal git output verbatim.`,
   permissionMode: "bypassPermissions",
   maxTurns: 30,
   maxBudgetUsd: 2,
