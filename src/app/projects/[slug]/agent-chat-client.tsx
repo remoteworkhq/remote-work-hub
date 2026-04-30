@@ -327,11 +327,11 @@ export default function AgentChatClient({
     el.scrollTop = el.scrollHeight;
   }, [messages.length, status]);
 
-  // Hydrate prior messages from 21st thread on mount (so chat persists across nav).
-  // Race-safety: only seed if local state is still empty when fetch resolves —
-  // otherwise we'd wipe a fresh user/agent exchange that began during the fetch.
+  // Hydrate prior chat on mount — always shows, regardless of how this
+  // session was reached. Input is disabled (see `submit`/render below) until
+  // hydration completes, so we never race a typed message against the seed.
   useEffect(() => {
-    if (!threadId || hydrated) return;
+    if (hydrated) return;
     let cancelled = false;
     (async () => {
       try {
@@ -343,11 +343,7 @@ export default function AgentChatClient({
         if (!r.ok || cancelled) return;
         const data = (await r.json()) as { messages?: unknown };
         if (cancelled) return;
-        if (
-          Array.isArray(data.messages) &&
-          data.messages.length > 0 &&
-          messages.length === 0
-        ) {
+        if (Array.isArray(data.messages) && data.messages.length > 0) {
           setMessages(
             data.messages as Parameters<typeof setMessages>[0],
           );
@@ -359,9 +355,7 @@ export default function AgentChatClient({
     return () => {
       cancelled = true;
     };
-    // intentionally exclude `messages` from deps — we only check it at fetch resolution.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, slug, hydrated, setMessages]);
+  }, [slug, hydrated, setMessages]);
 
   // Hush unused-warning when threadId not used elsewhere
   void recordedThreadIdRef;
@@ -463,7 +457,8 @@ export default function AgentChatClient({
 
   const submit = () => {
     const text = input.trim();
-    if (!text || status === "streaming" || status === "submitted") return;
+    if (!text || status === "streaming" || status === "submitted" || !hydrated)
+      return;
     void sendMessage({ text });
     setInput("");
     try {
@@ -686,8 +681,13 @@ export default function AgentChatClient({
               onKeyDown={onKeyDown}
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
-              placeholder="Tell the agent what to change…"
-              className="flex-1 resize-none bg-transparent border-none text-paper text-[15px] placeholder:text-paper-faint focus:outline-none py-4 min-h-[56px]"
+              placeholder={
+                hydrated
+                  ? "Tell the agent what to change…"
+                  : "Loading prior chat…"
+              }
+              disabled={!hydrated}
+              className="flex-1 resize-none bg-transparent border-none text-paper text-[15px] placeholder:text-paper-faint focus:outline-none py-4 min-h-[56px] disabled:opacity-50"
               style={{ overflow: "hidden" }}
             />
             <div className="p-2">

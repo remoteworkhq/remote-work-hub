@@ -192,6 +192,12 @@ export type StoredMessage = {
 };
 
 export async function getThreadMessages(slug: string): Promise<StoredMessage[]> {
+  // Transcript-first: it's the durable source of truth (~50ms Supabase read)
+  // and survives sandbox death. Only fall back to the live 21st thread if no
+  // transcript exists yet (brand-new project, first turn not finished).
+  const transcript = await getLatestTranscript(slug);
+  if (transcript.length > 0) return transcript;
+
   const session = await getActiveSession(slug);
   if (session?.threadId) {
     try {
@@ -202,12 +208,10 @@ export async function getThreadMessages(slug: string): Promise<StoredMessage[]> 
       const raw = thread.messages;
       if (Array.isArray(raw) && raw.length > 0) return raw as StoredMessage[];
     } catch {
-      // fall through to transcript fallback
+      // ignore
     }
   }
-  // Fallback: most recent persisted transcript for this slug, regardless of
-  // session status. Survives sandbox death / 21st thread reap.
-  return getLatestTranscript(slug);
+  return [];
 }
 
 export async function getLatestTranscript(slug: string): Promise<StoredMessage[]> {
