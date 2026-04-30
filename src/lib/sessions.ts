@@ -189,10 +189,29 @@ export async function startSpawn(slug: string): Promise<Session> {
 }
 
 export type StoredMessage = {
-  id?: string;
+  id: string;
   role: string;
   parts: Array<{ type: string; [k: string]: unknown }>;
 };
+
+// 21st thread.messages returns user messages without an `id`. React keys break
+// for messages without ids — assign a stable one.
+function normalizeMessages(msgs: unknown[]): StoredMessage[] {
+  if (!Array.isArray(msgs)) return [];
+  return msgs.map((raw, i) => {
+    const m = raw as { id?: string; role?: string; parts?: unknown };
+    const id =
+      typeof m.id === "string" && m.id.length > 0
+        ? m.id
+        : `srv-${i}-${typeof m.role === "string" ? m.role : "unknown"}`;
+    return {
+      ...(m as object),
+      id,
+      role: typeof m.role === "string" ? m.role : "unknown",
+      parts: Array.isArray(m.parts) ? (m.parts as StoredMessage["parts"]) : [],
+    };
+  });
+}
 
 async function getCurrentSessionTranscript(
   sessionId: string,
@@ -205,7 +224,7 @@ async function getCurrentSessionTranscript(
     .maybeSingle();
   const t = data?.transcript;
   if (!Array.isArray(t)) return [];
-  return t as StoredMessage[];
+  return normalizeMessages(t);
 }
 
 export async function getThreadMessages(slug: string): Promise<StoredMessage[]> {
@@ -223,7 +242,7 @@ export async function getThreadMessages(slug: string): Promise<StoredMessage[]> 
         });
         const raw = thread.messages;
         if (Array.isArray(raw) && raw.length > 0)
-          return raw as StoredMessage[];
+          return normalizeMessages(raw);
       } catch {
         // fall through
       }
@@ -248,7 +267,7 @@ export async function getLatestTranscript(slug: string): Promise<StoredMessage[]
     .maybeSingle();
   const t = data?.transcript;
   if (!Array.isArray(t)) return [];
-  return t as StoredMessage[];
+  return normalizeMessages(t);
 }
 
 export async function persistTranscript(

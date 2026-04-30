@@ -373,17 +373,26 @@ export default function AgentChatClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messagesKey]);
 
-  // Merged view: historical + live, dedupe by id (live wins).
+  // Merged view: historical + live, dedupe by id AND first-50-chars-of-text
+  // (in case ids differ between sources for the same logical message).
   const messages = useMemo<UIMessage[]>(() => {
-    if (historical.length === 0) return liveMessages as unknown as UIMessage[];
-    const liveIds = new Set(
-      (liveMessages as unknown as UIMessage[]).map((m) => m.id),
+    const live = liveMessages as unknown as UIMessage[];
+    if (historical.length === 0) return live;
+    const sig = (m: UIMessage) => {
+      const firstText =
+        (m.parts ?? []).find(
+          (p: { type: string; text?: string }) => p.type === "text",
+        )?.text ?? "";
+      return `${m.role}::${firstText.slice(0, 60)}`;
+    };
+    const liveSet = new Set([
+      ...live.map((m) => m.id).filter(Boolean),
+      ...live.map(sig),
+    ]);
+    const histPruned = historical.filter(
+      (h) => !liveSet.has(h.id) && !liveSet.has(sig(h)),
     );
-    const histPruned = historical.filter((h) => !liveIds.has(h.id));
-    return [
-      ...histPruned,
-      ...(liveMessages as unknown as UIMessage[]),
-    ];
+    return [...histPruned, ...live];
   }, [historical, liveMessages]);
 
   // Persist merged view to localStorage so it survives any nav/refresh.
@@ -864,7 +873,7 @@ export default function AgentChatClient({
           )}
           {messages.map((m, i) => (
             <MessageRow
-              key={m.id}
+              key={m.id || `idx-${i}`}
               message={m as unknown as UIMessage}
               index={i}
             />
