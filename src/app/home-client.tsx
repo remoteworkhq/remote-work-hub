@@ -259,7 +259,7 @@ export default function HomeClient({ projects }: { projects: ProjectMeta[] }) {
       <footer className="max-w-[1440px] mx-auto px-8 lg:px-14 pb-10">
         <div className="rule-hairline mb-4" />
         <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.28em] text-paper-faint">
-          <span>remote-work-hub · vercel · supabase · 21st</span>
+          <span>remote-work-hub · vercel · convex · 21st</span>
           <span>v0.2</span>
         </div>
       </footer>
