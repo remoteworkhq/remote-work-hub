@@ -26,6 +26,28 @@ import { cn } from "@/lib/utils";
 
 type PushResult = { exitCode: number; stdout: string; stderr: string };
 
+type Usage = {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  totalCostUsd: number | null;
+  durationMs: number | null;
+};
+
+function fmtTokens(n: number | null | undefined): string {
+  if (typeof n !== "number") return "—";
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+function fmtUsd(n: number | null | undefined): string {
+  if (typeof n !== "number") return "—";
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  if (n < 10) return `$${n.toFixed(3)}`;
+  return `$${n.toFixed(2)}`;
+}
+
 type Attachment = {
   filename: string;
   path: string;
@@ -316,6 +338,7 @@ export default function AgentChatClient({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [downloads, setDownloads] = useState<DownloadFile[]>([]);
+  const [usage, setUsage] = useState<Usage | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastAutoPushedAtRef = useRef<number>(0);
   const prevStatusRef = useRef<string>("ready");
@@ -486,6 +509,24 @@ export default function AgentChatClient({
         if (!r.ok) return;
         const data = (await r.json()) as { files?: DownloadFile[] };
         setDownloads(data.files ?? []);
+      } catch {}
+    })();
+  }, [status, messages.length, slug]);
+
+  // Pull session token/cost usage on each turn-end transition
+  useEffect(() => {
+    if (status !== "ready") return;
+    if (messages.length === 0) return;
+    void (async () => {
+      try {
+        const r = await fetch("/api/sessions/usage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slug }),
+        });
+        if (!r.ok) return;
+        const data = (await r.json()) as { usage?: Usage | null };
+        if (data.usage) setUsage(data.usage);
       } catch {}
     })();
   }, [status, messages.length, slug]);
@@ -725,6 +766,21 @@ export default function AgentChatClient({
                 {repo}
               </p>
             </a>
+            <div
+              className="text-right"
+              title="Cumulative token usage and cost for this session. 21st does not expose weekly/monthly account quota via API, so only per-session totals are shown here."
+            >
+              <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-paper-faint">
+                tokens · cost
+              </p>
+              <p className="mt-0.5 font-mono text-xs text-paper-dim flex items-center gap-2 justify-end">
+                <span>
+                  ↑{fmtTokens(usage?.inputTokens)} ↓{fmtTokens(usage?.outputTokens)}
+                </span>
+                <span className="text-paper-faint">·</span>
+                <span className="text-amber">{fmtUsd(usage?.totalCostUsd)}</span>
+              </p>
+            </div>
             <div className="text-right">
               <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-paper-faint">
                 sandbox
