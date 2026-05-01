@@ -86,6 +86,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [spawnStates, setSpawnStates] = useState<Record<string, SpawnState>>({});
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const inFlightRef = useRef<Record<string, Promise<Session> | undefined>>({});
+  // Slugs currently being ended. Refresh polls ignore these slugs to prevent
+  // a stale poll from re-adding a session right after the user clicks End.
+  const endingSlugsRef = useRef<Set<string>>(new Set());
 
   const upsertSession = useCallback((session: Session) => {
     setSessions((prev) => {
@@ -100,8 +103,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     const r = await fetch("/api/sessions");
     if (!r.ok) return;
     const data = (await r.json()) as { sessions: Session[] };
-    setSessions(data.sessions);
-    saveCached(data.sessions);
+    // Drop any slug that we're currently ending — protects against race
+    // where the poll catches the DB row before the end's update committed.
+    const ending = endingSlugsRef.current;
+    const filtered =
+      ending.size === 0
+        ? data.sessions
+        : data.sessions.filter((s) => !ending.has(s.slug));
+    setSessions(filtered);
+    saveCached(filtered);
   }, []);
 
   useEffect(() => {
@@ -158,8 +168,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const end = useCallback(
     async (slug: string) => {
-      // Optimistic: remove from UI immediately so the hub doesn't keep showing it.
       const previous = sessions;
+      // Optimistic UI: remove + mark slug as "ending" so refresh polls skip it.
+      endingSlugsRef.current.add(slug);
       setSessions((prev) => {
         const next = prev.filter((s) => s.slug !== slug);
         saveCached(next);
@@ -170,6 +181,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         delete next[slug];
         return next;
       });
+      let succeeded = false;
       try {
         const r = await fetch("/api/sessions/end", {
           method: "POST",
@@ -177,13 +189,24 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           body: JSON.stringify({ slug }),
         });
         if (!r.ok) {
-          // Roll back on failure
+          // Roll back UI; let polls show the truth on next refresh.
+          endingSlugsRef.current.delete(slug);
           setSessions(previous);
           saveCached(previous);
           throw new Error(`end failed: ${r.status}`);
         }
+        succeeded = true;
       } finally {
-        // Always reconcile with server state shortly after
+        // Only clear ending flag on success — on failure we already rolled back
+        // above, and we want immediate refresh to show actual server state.
+        if (succeeded) {
+          // Brief grace window so an already-in-flight poll can land before we
+          // un-shield the slug. After 1s, polls pick up the DB-dead state.
+          setTimeout(() => {
+            endingSlugsRef.current.delete(slug);
+            void refresh();
+          }, 1000);
+        }
         void refresh();
       }
     },
