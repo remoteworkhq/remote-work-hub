@@ -1,7 +1,7 @@
 import { agent } from "@21st-sdk/agent";
 
 export default agent({
-  model: "claude-opus-4-7-1m",
+  model: "opus",
   runtime: "claude-code",
   // Opus is ~5x the cost of Sonnet — give it room without going wild
   maxTurns: 60,
