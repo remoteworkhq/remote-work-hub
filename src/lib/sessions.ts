@@ -1,6 +1,8 @@
 import "server-only";
 import { AgentClient } from "@21st-sdk/node";
-import { getAdminClient } from "@/lib/supabase/admin";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import { getRepoForSlug } from "@/lib/projects";
 
 const PROJECT_PATH = "/home/user/workspace/project";
@@ -16,7 +18,7 @@ const NETWORK_ALLOW = [
 const NETWORK_DENY = ["0.0.0.0/0"];
 
 export type Session = {
-  id: string;
+  id: Id<"sessions">;
   slug: string;
   sandboxId: string;
   threadId: string | null;
@@ -33,8 +35,16 @@ function need(name: string): string {
   return v;
 }
 
-function client(): AgentClient {
+function agentClient(): AgentClient {
   return new AgentClient({ apiKey: need("API_KEY_21ST") });
+}
+
+let convexClientInstance: ConvexHttpClient | null = null;
+function convex(): ConvexHttpClient {
+  if (!convexClientInstance) {
+    convexClientInstance = new ConvexHttpClient(need("NEXT_PUBLIC_CONVEX_URL"));
+  }
+  return convexClientInstance;
 }
 
 function buildRemoteUrl(repo: string, ghToken: string): string {
@@ -44,7 +54,6 @@ function buildRemoteUrl(repo: string, ghToken: string): string {
 function buildSetup(remoteUrl: string, priorLog: string | null): string[] {
   const steps = [
     `mkdir -p /home/user/workspace`,
-    // --depth 1 = ~3x faster clone; we don't need deep history.
     `git clone --depth 1 ${remoteUrl} ${PROJECT_PATH}`,
     `chmod -R a+rw ${PROJECT_PATH}`,
     `git -C ${PROJECT_PATH} config user.name "Remote Work Hub Agent"`,
@@ -53,8 +62,6 @@ function buildSetup(remoteUrl: string, priorLog: string | null): string[] {
     `git config --system --add safe.directory '*' || git config --global --add safe.directory '*'`,
   ];
   if (priorLog) {
-    // Inject prior session context as a file the agent reads on init.
-    // Use base64 so multi-line / quoted content survives the shell.
     const b64 = Buffer.from(priorLog, "utf8").toString("base64");
     steps.push(`mkdir -p /home/user/.hub`);
     steps.push(`echo ${b64} | base64 -d > /home/user/.hub/context.md`);
@@ -63,77 +70,64 @@ function buildSetup(remoteUrl: string, priorLog: string | null): string[] {
   return steps;
 }
 
-function rowToSession(row: {
-  id: string;
-  project_slug: string | null;
-  sandbox_id: string | null;
-  thread_id: string | null;
-  repo: string | null;
+type ConvexSession = {
+  _id: Id<"sessions">;
+  _creationTime: number;
+  projectSlug: string;
+  sandboxId: string;
+  threadId?: string | null;
+  repo: string;
   status: string;
-  started_at: string;
-  last_active_at: string;
-  last_response_at?: string | null;
-}): Session | null {
-  if (!row.project_slug || !row.sandbox_id || !row.repo) return null;
+  transcript?: unknown[];
+  startedAt: number;
+  lastActiveAt: number;
+  lastResponseAt?: number | null;
+  endedAt?: number | null;
+};
+
+function rowToSession(row: ConvexSession | null | undefined): Session | null {
+  if (!row) return null;
   return {
-    id: row.id,
-    slug: row.project_slug,
-    sandboxId: row.sandbox_id,
-    threadId: row.thread_id,
+    id: row._id,
+    slug: row.projectSlug,
+    sandboxId: row.sandboxId,
+    threadId: row.threadId ?? null,
     repo: row.repo,
     status: row.status,
-    createdAt: row.started_at,
-    lastActiveAt: row.last_active_at,
-    lastResponseAt: row.last_response_at ?? null,
+    createdAt: new Date(row.startedAt).toISOString(),
+    lastActiveAt: new Date(row.lastActiveAt).toISOString(),
+    lastResponseAt: row.lastResponseAt
+      ? new Date(row.lastResponseAt).toISOString()
+      : null,
   };
 }
 
 async function isSandboxAlive(sandboxId: string): Promise<boolean> {
   try {
-    const detail = await client().sandboxes.get(sandboxId);
+    const detail = await agentClient().sandboxes.get(sandboxId);
     return detail?.status !== "error" && detail?.status !== "dead";
   } catch {
     return false;
   }
 }
 
-async function markSessionDead(
-  supabase: ReturnType<typeof getAdminClient>,
-  sandboxId: string,
-) {
-  await supabase
-    .from("sessions")
-    .update({ status: "dead", ended_at: new Date().toISOString() })
-    .eq("sandbox_id", sandboxId);
-}
-
 export async function getActiveSession(slug: string): Promise<Session | null> {
-  const supabase = getAdminClient();
-  const { data } = await supabase
-    .from("sessions")
-    .select("*")
-    .eq("project_slug", slug)
-    .in("status", ["ready", "spawning"])
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!data) return null;
-  const session = rowToSession(data);
-  if (!session) return null;
-  // Only verify alive for ready sessions; spawning ones may not be queryable yet.
-  if (session.status === "ready") {
-    const alive = await isSandboxAlive(session.sandboxId);
+  const row = (await convex().query(api.sessions.getActive, {
+    slug,
+  })) as ConvexSession | null;
+  if (!row) return null;
+  if (row.status === "ready") {
+    const alive = await isSandboxAlive(row.sandboxId);
     if (!alive) {
-      await markSessionDead(supabase, session.sandboxId);
+      await convex().mutation(api.sessions.markDeadBySandbox, {
+        sandboxId: row.sandboxId,
+      });
       return null;
     }
   }
-  return session;
+  return rowToSession(row);
 }
 
-// Phase 1: create the sandbox + thread + insert the row + return immediately.
-// The clone runs in 21st's sandbox in the background. Client must poll
-// finalizeSpawn() to flip to status=ready.
 export async function startSpawn(slug: string): Promise<Session> {
   const repo = getRepoForSlug(slug);
   if (!repo) throw new Error(`Unknown project slug: ${slug}`);
@@ -143,7 +137,7 @@ export async function startSpawn(slug: string): Promise<Session> {
 
   const ghToken = need("GITHUB_TOKEN");
   const remoteUrl = buildRemoteUrl(repo, ghToken);
-  const c = client();
+  const c = agentClient();
 
   const priorLog = await getLatestLog(slug);
   const sandbox = await c.sandboxes.create({
@@ -154,41 +148,88 @@ export async function startSpawn(slug: string): Promise<Session> {
     setup: buildSetup(remoteUrl, priorLog),
   });
 
-  // Pre-create the conversation thread so we have a stable threadId from
-  // the start. Same threadId is reused across page reloads / nav, so chat
-  // history can be fetched and restored.
   const thread = await c.threads.create({
     sandboxId: sandbox.id,
     name: slug,
   });
 
-  const supabase = getAdminClient();
-  const { data, error } = await supabase
-    .from("sessions")
-    .insert({
-      project_slug: slug,
-      sandbox_id: sandbox.id,
-      thread_id: thread.id,
-      repo,
-      status: "spawning",
-    })
-    .select()
-    .single();
-  if (error || !data) {
-    // Race: another spawn won the unique constraint. Use that.
-    const winner = await getActiveSession(slug);
-    if (winner) {
-      await c.sandboxes.delete(sandbox.id).catch(() => {});
-      return winner;
-    }
-    throw new Error(
-      `DB insert failed: ${error?.message ?? "unknown"}. Sandbox ${sandbox.id} may need manual cleanup.`,
-    );
-  }
+  await convex().mutation(api.sessions.startSpawn, {
+    slug,
+    sandboxId: sandbox.id,
+    threadId: thread.id,
+    repo,
+  });
 
-  const session = rowToSession(data);
+  // Re-read so we have the canonical row (incl. _id, lastActiveAt)
+  const created = (await convex().query(api.sessions.getActive, {
+    slug,
+  })) as ConvexSession | null;
+  const session = rowToSession(created);
   if (!session) throw new Error("Failed to materialize session row");
   return session;
+}
+
+export async function finalizeSpawn(slug: string): Promise<{
+  status: "spawning" | "ready" | "missing";
+  session: Session | null;
+}> {
+  const session = await getActiveSession(slug);
+  if (!session) return { status: "missing", session: null };
+  if (session.status === "ready") return { status: "ready", session };
+
+  const c = agentClient();
+  let exit = 1;
+  try {
+    const r = await c.sandboxes.exec({
+      sandboxId: session.sandboxId,
+      command: `[ -f ${READY_PATH} ] && echo READY || echo PENDING`,
+      timeoutMs: 8_000,
+    });
+    exit = /READY/.test(r.stdout) ? 0 : 1;
+  } catch {
+    return { status: "spawning", session };
+  }
+
+  if (exit !== 0) return { status: "spawning", session };
+
+  await convex().mutation(api.sessions.markReady, {
+    sandboxId: session.sandboxId,
+  });
+  const updated = (await convex().query(api.sessions.getActive, {
+    slug,
+  })) as ConvexSession | null;
+  return {
+    status: "ready",
+    session: rowToSession(updated) ?? session,
+  };
+}
+
+export async function listActiveSessions(): Promise<Session[]> {
+  const rows = (await convex().query(
+    api.sessions.list,
+    {},
+  )) as ConvexSession[];
+  return rows
+    .map((r) => rowToSession(r))
+    .filter((s): s is Session => s !== null);
+}
+
+// Fast end: flip DB to dead, then fire-and-forget sandbox deletes.
+export async function endSession(slug: string): Promise<void> {
+  const sandboxIds = (await convex().mutation(api.sessions.endSession, {
+    slug,
+  })) as string[];
+  const c = agentClient();
+  for (const id of sandboxIds) {
+    void c.sandboxes.delete(id).catch(() => {});
+  }
+}
+
+export async function recordThreadId(
+  slug: string,
+  threadId: string,
+): Promise<void> {
+  await convex().mutation(api.sessions.recordThreadId, { slug, threadId });
 }
 
 export type StoredMessage = {
@@ -197,8 +238,6 @@ export type StoredMessage = {
   parts: Array<{ type: string; [k: string]: unknown }>;
 };
 
-// 21st thread.messages returns user messages without an `id`. React keys break
-// for messages without ids — assign a stable one.
 function normalizeMessages(msgs: unknown[]): StoredMessage[] {
   if (!Array.isArray(msgs)) return [];
   return msgs.map((raw, i) => {
@@ -216,61 +255,34 @@ function normalizeMessages(msgs: unknown[]): StoredMessage[] {
   });
 }
 
-async function getCurrentSessionTranscript(
-  sessionId: string,
-): Promise<StoredMessage[]> {
-  const supabase = getAdminClient();
-  const { data } = await supabase
-    .from("sessions")
-    .select("transcript")
-    .eq("id", sessionId)
-    .maybeSingle();
-  const t = data?.transcript;
-  if (!Array.isArray(t)) return [];
-  return normalizeMessages(t);
-}
-
 export async function getThreadMessages(slug: string): Promise<StoredMessage[]> {
-  // Priority for showing chat history:
-  //   1. Live thread on 21st (covers in-progress / mid-stream state)
-  //   2. CURRENT session's persisted transcript (recent autosave)
-  //   3. Prior session's transcript (fresh session inheriting old project history)
   const session = await getActiveSession(slug);
   if (session) {
     if (session.threadId) {
       try {
-        const thread = await client().threads.get({
+        const thread = await agentClient().threads.get({
           sandboxId: session.sandboxId,
           threadId: session.threadId,
         });
         const raw = thread.messages;
-        if (Array.isArray(raw) && raw.length > 0)
-          return normalizeMessages(raw);
-      } catch {
-        // fall through
-      }
+        if (Array.isArray(raw) && raw.length > 0) return normalizeMessages(raw);
+      } catch {}
     }
-    const own = await getCurrentSessionTranscript(session.id);
-    if (own.length > 0) return own;
+    const own = (await convex().query(api.sessions.getCurrentTranscript, {
+      sessionId: session.id,
+    })) as unknown[];
+    if (own.length > 0) return normalizeMessages(own);
   }
-  // No live session OR live session has no messages yet: fall back to the most
-  // recent persisted transcript for this slug (prior session continuation).
   return getLatestTranscript(slug);
 }
 
-export async function getLatestTranscript(slug: string): Promise<StoredMessage[]> {
-  const supabase = getAdminClient();
-  const { data } = await supabase
-    .from("sessions")
-    .select("transcript, started_at")
-    .eq("project_slug", slug)
-    .not("transcript", "is", null)
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const t = data?.transcript;
-  if (!Array.isArray(t)) return [];
-  return normalizeMessages(t);
+export async function getLatestTranscript(
+  slug: string,
+): Promise<StoredMessage[]> {
+  const raw = (await convex().query(api.sessions.getLatestTranscript, {
+    slug,
+  })) as unknown[];
+  return normalizeMessages(raw ?? []);
 }
 
 export async function persistTranscript(
@@ -279,210 +291,11 @@ export async function persistTranscript(
   opts: { markResponseComplete?: boolean } = {},
 ): Promise<void> {
   if (!Array.isArray(messages)) return;
-  const supabase = getAdminClient();
-  const { data: row } = await supabase
-    .from("sessions")
-    .select("id")
-    .eq("project_slug", slug)
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!row?.id) return;
-  const now = new Date().toISOString();
-  const update: Record<string, unknown> = {
-    transcript: messages,
-    last_active_at: now,
-  };
-  if (opts.markResponseComplete) {
-    update.last_response_at = now;
-  }
-  await supabase.from("sessions").update(update).eq("id", row.id);
-}
-
-// Phase 2: check if the workspace marker exists. Updates DB to ready if so.
-export async function finalizeSpawn(slug: string): Promise<{
-  status: "spawning" | "ready" | "missing";
-  session: Session | null;
-}> {
-  const session = await getActiveSession(slug);
-  if (!session) return { status: "missing", session: null };
-  if (session.status === "ready") return { status: "ready", session };
-
-  const c = client();
-  // Quick exec: did the marker land yet?
-  let exit = 1;
-  try {
-    const r = await c.sandboxes.exec({
-      sandboxId: session.sandboxId,
-      command: `[ -f ${READY_PATH} ] && echo READY || echo PENDING`,
-      timeoutMs: 8_000,
-    });
-    exit = /READY/.test(r.stdout) ? 0 : 1;
-  } catch {
-    return { status: "spawning", session };
-  }
-
-  if (exit !== 0) return { status: "spawning", session };
-
-  const supabase = getAdminClient();
-  const { data } = await supabase
-    .from("sessions")
-    .update({
-      status: "ready",
-      last_active_at: new Date().toISOString(),
-    })
-    .eq("sandbox_id", session.sandboxId)
-    .select()
-    .single();
-  if (!data) return { status: "ready", session };
-  const updated = rowToSession(data);
-  return { status: "ready", session: updated ?? session };
-}
-
-export async function listActiveSessions(): Promise<Session[]> {
-  const supabase = getAdminClient();
-  const { data } = await supabase
-    .from("sessions")
-    .select("*")
-    .in("status", ["ready", "spawning"])
-    .order("last_active_at", { ascending: false });
-  if (!data) return [];
-  const sessions: Session[] = [];
-  for (const row of data) {
-    const session = rowToSession(row);
-    if (!session) continue;
-    sessions.push(session);
-  }
-  return sessions;
-}
-
-// Fast end: mark DB dead synchronously, fire sandbox deletes without
-// awaiting. The user-facing concern (session no longer "ready" anywhere) is
-// satisfied the moment the DB row flips. Sandbox cleanup happens in the
-// background — if the Vercel function exits before delete completes, 21st's
-// idle reaper handles it.
-export async function endSession(slug: string): Promise<void> {
-  const supabase = getAdminClient();
-  const { data: rows } = await supabase
-    .from("sessions")
-    .select("sandbox_id")
-    .eq("project_slug", slug)
-    .in("status", ["ready", "spawning"]);
-  // Sync: flip DB status. Returns the moment Postgres commits.
-  await supabase
-    .from("sessions")
-    .update({ status: "dead", ended_at: new Date().toISOString() })
-    .eq("project_slug", slug)
-    .in("status", ["ready", "spawning"]);
-  // Fire-and-forget sandbox deletes. No await, no race timeout.
-  const c = client();
-  for (const row of rows ?? []) {
-    if (row.sandbox_id) {
-      void c.sandboxes.delete(row.sandbox_id).catch(() => {});
-    }
-  }
-}
-
-const SUMMARY_PROMPT = `You are wrapping up a session inside /workspace/project. Write a concise log (UNDER 1800 characters TOTAL) of this session to /home/user/.hub/context.md as plain markdown. Include:
-
-- "## Built" — what was added or changed (use git log -n 10 --oneline and git diff --stat HEAD~1)
-- "## Open" — what is unfinished, pending, or has known issues
-- "## Next" — one or two suggested next steps for the future you
-
-Be terse. Bullet points. No fluff. Hard cap 1800 chars. After writing the file, reply only with "saved".`;
-
-const SUMMARY_WAIT_SECONDS = 35;
-
-async function writeSessionLog(slug: string, sandboxId: string): Promise<void> {
-  const c = client();
-  // Run on a separate thread so the user's main chat history stays clean.
-  const summaryThread = await c.threads.create({
-    sandboxId,
-    name: `_summary_${Date.now()}`,
+  await convex().mutation(api.sessions.persistTranscript, {
+    slug,
+    messages,
+    markResponseComplete: !!opts.markResponseComplete,
   });
-  await c.threads.run({
-    agent: "hub-tester",
-    sandboxId,
-    threadId: summaryThread.id,
-    messages: [
-      {
-        role: "user",
-        parts: [{ type: "text", text: SUMMARY_PROMPT }],
-      },
-    ],
-    mode: "background",
-  });
-
-  // Poll until completed (or timeout)
-  const deadline = Date.now() + SUMMARY_WAIT_SECONDS * 1000;
-  let done = false;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1500));
-    const t = await c.threads
-      .get({ sandboxId, threadId: summaryThread.id })
-      .catch(() => null);
-    if (!t) break;
-    if (t.status === "completed" || t.status === "error") {
-      done = true;
-      break;
-    }
-  }
-  if (!done) {
-    // Best-effort: clean up the summary thread
-    await c.threads
-      .delete({ sandboxId, threadId: summaryThread.id })
-      .catch(() => {});
-    return;
-  }
-
-  // Read the file the agent wrote
-  const fileRead = await c.sandboxes
-    .exec({
-      sandboxId,
-      command: "cat /home/user/.hub/context.md 2>/dev/null | head -c 4000",
-      timeoutMs: 8_000,
-    })
-    .catch(() => null);
-
-  await c.threads
-    .delete({ sandboxId, threadId: summaryThread.id })
-    .catch(() => {});
-
-  const summary = (fileRead?.stdout || "").trim();
-  if (!summary) return;
-
-  // Cap stored summary
-  const truncated = summary.length > 2000 ? summary.slice(0, 2000) : summary;
-  const supabase = getAdminClient();
-  await supabase
-    .from("project_logs")
-    .insert({ project_slug: slug, summary: truncated });
-}
-
-export async function getLatestLog(slug: string): Promise<string | null> {
-  const supabase = getAdminClient();
-  const { data } = await supabase
-    .from("project_logs")
-    .select("summary, created_at")
-    .eq("project_slug", slug)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!data?.summary) return null;
-  const ts = new Date(data.created_at).toISOString();
-  return `# Previous session log (${ts})\n\n${data.summary}\n`;
-}
-
-export async function recordThreadId(slug: string, threadId: string): Promise<void> {
-  const supabase = getAdminClient();
-  await supabase
-    .from("sessions")
-    .update({
-      thread_id: threadId,
-      last_active_at: new Date().toISOString(),
-    })
-    .eq("project_slug", slug)
-    .eq("status", "ready");
 }
 
 export type PushResult = {
@@ -501,7 +314,11 @@ export async function pushSession(slug: string): Promise<PushResult> {
     return { exitCode: -1, stdout: "", stderr: `No active session for ${slug}` };
   }
   if (session.status !== "ready") {
-    return { exitCode: -1, stdout: "", stderr: `Session not ready (status: ${session.status})` };
+    return {
+      exitCode: -1,
+      stdout: "",
+      stderr: `Session not ready (status: ${session.status})`,
+    };
   }
   if (session.repo !== expectedRepo) {
     return {
@@ -511,7 +328,7 @@ export async function pushSession(slug: string): Promise<PushResult> {
     };
   }
 
-  const c = client();
+  const c = agentClient();
   const r = await c.sandboxes.exec({
     sandboxId: session.sandboxId,
     command:
@@ -522,15 +339,92 @@ export async function pushSession(slug: string): Promise<PushResult> {
     timeoutMs: 50_000,
   });
 
-  const supabase = getAdminClient();
-  await supabase
-    .from("sessions")
-    .update({ last_active_at: new Date().toISOString() })
-    .eq("sandbox_id", session.sandboxId);
+  await convex().mutation(api.sessions.bumpLastActive, {
+    sandboxId: session.sandboxId,
+  });
 
   return {
     exitCode: r.exitCode,
     stdout: r.stdout,
     stderr: r.stderr,
   };
+}
+
+const SUMMARY_PROMPT = `You are wrapping up a session inside /workspace/project. Write a concise log (UNDER 1800 characters TOTAL) of this session to /home/user/.hub/context.md as plain markdown. Include:
+
+- "## Built" — what was added or changed (use git log -n 10 --oneline and git diff --stat HEAD~1)
+- "## Open" — what is unfinished, pending, or has known issues
+- "## Next" — one or two suggested next steps for the future you
+
+Be terse. Bullet points. No fluff. Hard cap 1800 chars. After writing the file, reply only with "saved".`;
+
+const SUMMARY_WAIT_SECONDS = 35;
+
+export async function writeSessionLog(
+  slug: string,
+  sandboxId: string,
+): Promise<void> {
+  const c = agentClient();
+  const summaryThread = await c.threads.create({
+    sandboxId,
+    name: `_summary_${Date.now()}`,
+  });
+  await c.threads.run({
+    agent: "hub-tester",
+    sandboxId,
+    threadId: summaryThread.id,
+    messages: [
+      { role: "user", parts: [{ type: "text", text: SUMMARY_PROMPT }] },
+    ],
+    mode: "background",
+  });
+
+  const deadline = Date.now() + SUMMARY_WAIT_SECONDS * 1000;
+  let done = false;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const t = await c.threads
+      .get({ sandboxId, threadId: summaryThread.id })
+      .catch(() => null);
+    if (!t) break;
+    if (t.status === "completed" || t.status === "error") {
+      done = true;
+      break;
+    }
+  }
+  if (!done) {
+    await c.threads
+      .delete({ sandboxId, threadId: summaryThread.id })
+      .catch(() => {});
+    return;
+  }
+
+  const fileRead = await c.sandboxes
+    .exec({
+      sandboxId,
+      command: "cat /home/user/.hub/context.md 2>/dev/null | head -c 4000",
+      timeoutMs: 8_000,
+    })
+    .catch(() => null);
+
+  await c.threads
+    .delete({ sandboxId, threadId: summaryThread.id })
+    .catch(() => {});
+
+  const summary = (fileRead?.stdout || "").trim();
+  if (!summary) return;
+  const truncated = summary.length > 2000 ? summary.slice(0, 2000) : summary;
+  await convex().mutation(api.projectLogs.create, {
+    slug,
+    summary: truncated,
+  });
+}
+
+export async function getLatestLog(slug: string): Promise<string | null> {
+  const row = (await convex().query(api.projectLogs.getLatest, { slug })) as
+    | { summary: string; _creationTime: number }
+    | null;
+  if (!row?.summary) return null;
+  const ts = new Date(row._creationTime).toISOString();
+  return `# Previous session log (${ts})\n\n${row.summary}\n`;
 }
