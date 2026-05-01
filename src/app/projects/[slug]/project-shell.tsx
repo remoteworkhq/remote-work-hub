@@ -1,6 +1,5 @@
 "use client";
 import Link from "next/link";
-import { useEffect } from "react";
 import { useSessions } from "@/components/session-provider";
 import AgentChatClient from "./agent-chat-client";
 
@@ -15,14 +14,6 @@ export default function ProjectShell({
   const session = getSession(slug);
   const state = spawnStates[slug];
   const error = errors[slug];
-
-  // Only auto-spawn on first visit (no state recorded yet). Don't retry on
-  // error — that would loop forever and hide the error message.
-  useEffect(() => {
-    if (!session && state === undefined) {
-      void getOrCreate(slug).catch(() => {});
-    }
-  }, [slug, session, state, getOrCreate]);
 
   if (error) {
     return (
@@ -51,7 +42,21 @@ export default function ProjectShell({
     );
   }
 
-  if (!session || session.status !== "ready") {
+  if (session && session.status === "ready") {
+    return (
+      <AgentChatClient
+        key={session.sandboxId}
+        sandboxId={session.sandboxId}
+        threadId={session.threadId}
+        slug={slug}
+        repo={repo}
+      />
+    );
+  }
+
+  const spawning = state === "spawning" || state === "preparing" || session?.status === "spawning";
+
+  if (spawning) {
     const phase =
       state === "preparing" || session?.status === "spawning"
         ? "cloning repo"
@@ -86,13 +91,33 @@ export default function ProjectShell({
     );
   }
 
+  // Idle — no auto-spawn. User must explicitly start a sandbox.
   return (
-    <AgentChatClient
-      key={session.sandboxId}
-      sandboxId={session.sandboxId}
-      threadId={session.threadId}
-      slug={slug}
-      repo={repo}
-    />
+    <main className="min-h-dvh max-w-3xl mx-auto px-8 py-16">
+      <Link
+        href="/"
+        className="font-mono text-[11px] uppercase tracking-[0.28em] text-paper-faint hover:text-amber transition-colors"
+      >
+        ← back
+      </Link>
+      <p className="mt-8 font-mono text-[10px] uppercase tracking-[0.32em] text-paper-faint">
+        Project · idle
+      </p>
+      <h1 className="mt-2 font-display text-4xl italic text-paper">{slug}</h1>
+      <p className="mt-2 text-sm text-paper-dim">
+        Repo: <span className="font-mono text-paper">{repo}</span>
+      </p>
+      <p className="mt-6 max-w-md text-sm text-paper-dim leading-relaxed">
+        No active sandbox. Click below to spin one up — sandboxes cost money
+        while alive, so we don&apos;t auto-start them on every page load.
+      </p>
+      <button
+        type="button"
+        onClick={() => getOrCreate(slug).catch(() => {})}
+        className="mt-6 font-mono text-[11px] uppercase tracking-[0.2em] px-4 py-2 bg-amber text-ink hover:bg-amber/90 transition-colors"
+      >
+        Start sandbox →
+      </button>
+    </main>
   );
 }
