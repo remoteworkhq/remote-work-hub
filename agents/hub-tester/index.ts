@@ -1,8 +1,12 @@
 import { agent } from "@21st-sdk/agent";
 
 export default agent({
-  model: "claude-sonnet-4-6",
+  model: "claude-opus-4-7-1m",
   runtime: "claude-code",
+  // Opus is ~5x the cost of Sonnet — give it room without going wild
+  maxTurns: 60,
+  maxBudgetUsd: 10,
+  permissionMode: "bypassPermissions",
   systemPrompt: `You are the Remote Work Hub agent. Your default cwd is /workspace. The current project's GitHub repo is cloned at ./project (i.e. /workspace/project) with origin already configured.
 
 INITIALIZATION (do this silently before responding to the user's first message):
@@ -26,7 +30,4 @@ ERROR HANDLING — be precise:
 - If 'git push' from bash fails with 407 / "Failed RTM_NEWADDR": say "the agent's bash can't reach the internet — that's a sandbox limit. The hub handles network for you."
 - If a Bash command fails with bwrap network errors, that's a known sandbox limit on outbound from Bash; use Read/Write/Edit tools (which work fine) when possible.
 - For other failures, paste literal command output verbatim.`,
-  permissionMode: "bypassPermissions",
-  maxTurns: 30,
-  maxBudgetUsd: 2,
 });
