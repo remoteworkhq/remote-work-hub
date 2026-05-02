@@ -13,6 +13,10 @@ export type ProjectMeta = {
   name: string;
   description: string;
   repo: string;
+  // Vault services to fetch and inject into the sandbox as env vars.
+  // Each entry maps to a 'service' in the project-hub Convex secrets table.
+  // Setup script pulls every key under those services and writes them to .env.local.
+  services?: string[];
 };
 
 // Public-safe project metadata (no secrets, no token URLs). Safe to ship to
@@ -24,6 +28,7 @@ export const PROJECTS: ProjectMeta[] = [
     description:
       "Throwaway repo for proving the Claude Code agent flow end-to-end.",
     repo: "daniels-project-space/sandbox-test",
+    services: ["anthropic"],
   },
   {
     slug: "music-house",
@@ -31,9 +36,15 @@ export const PROJECTS: ProjectMeta[] = [
     description:
       "AI music label. Suno + Mureka generation, organized catalog with timestamped lyrics, hearts, playlists, distribution-ready.",
     repo: "daniels-project-space/music-house",
+    services: ["convex", "cloudflare", "suno", "mureka", "kits", "anthropic", "replicate", "trigger"],
   },
 ];
 
 export function getRepoForSlug(slug: string): string | null {
   return PROJECT_REPOS[slug] ?? null;
+}
+
+export function getServicesForSlug(slug: string): string[] {
+  const meta = PROJECTS.find((p) => p.slug === slug);
+  return meta?.services ?? [];
 }

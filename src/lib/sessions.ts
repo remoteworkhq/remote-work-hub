@@ -3,7 +3,7 @@ import { AgentClient } from "@21st-sdk/node";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { getRepoForSlug } from "@/lib/projects";
+import { getRepoForSlug, getServicesForSlug } from "@/lib/projects";
 
 const PROJECT_PATH = "/home/user/workspace/project";
 const READY_PATH = `${PROJECT_PATH}/.hub-ready`;
@@ -51,7 +51,39 @@ function buildRemoteUrl(repo: string, ghToken: string): string {
   return `https://x-access-token:${ghToken}@github.com/${repo}.git`;
 }
 
-function buildSetup(remoteUrl: string, priorLog: string | null): string[] {
+const VAULT_URL = process.env.VAULT_URL ?? "https://fantastic-roadrunner-485.convex.cloud";
+
+// Bash one-liner that runs inside the sandbox: pulls every key for each
+// requested service from the project-hub Convex secrets vault and appends
+// KEY=VALUE lines to .env.local in the cloned project. Idempotent — replaces
+// any existing line with the same KEY.
+function buildVaultPullCommand(services: string[]): string {
+  const env = JSON.stringify(VAULT_URL);
+  const svcList = JSON.stringify(services);
+  return [
+    `python3 - <<'PYEND'`,
+    `import urllib.request, json, os`,
+    `VAULT = ${env}`,
+    `services = ${svcList}`,
+    `lines = []`,
+    `for svc in services:`,
+    `    body = json.dumps({\"path\":\"secrets:listByService\",\"args\":{\"service\":svc},\"format\":\"json\"}).encode()`,
+    `    req = urllib.request.Request(VAULT + \"/api/query\", data=body, headers={\"Content-Type\":\"application/json\"}, method=\"POST\")`,
+    `    rows = json.loads(urllib.request.urlopen(req).read()).get(\"value\", []) or []`,
+    `    for r in rows:`,
+    `        v = (r.get(\"value\") or \"\").replace(\"\\n\", \"\\\\n\")`,
+    `        lines.append(f\"{r['keyName']}={v}\")`,
+    `p = \"${PROJECT_PATH}/.env.local\"`,
+    `existing = open(p).read() if os.path.exists(p) else \"\"`,
+    `new_keys = {l.split(\"=\",1)[0] for l in lines}`,
+    `keep = [l for l in existing.splitlines() if l and l.split(\"=\",1)[0] not in new_keys]`,
+    `open(p,\"w\").write(\"\n\".join(keep + lines) + \"\n\")`,
+    `print(f\"vault: wrote {len(lines)} keys from {len(services)} services\")`,
+    `PYEND`,
+  ].join("\n");
+}
+
+function buildSetup(remoteUrl: string, priorLog: string | null, services: string[]): string[] {
   const steps = [
     `mkdir -p /home/user/workspace`,
     `git clone --depth 1 ${remoteUrl} ${PROJECT_PATH}`,
@@ -61,6 +93,7 @@ function buildSetup(remoteUrl: string, priorLog: string | null): string[] {
     `git -C ${PROJECT_PATH} remote set-url origin ${remoteUrl}`,
     `git config --system --add safe.directory '*' || git config --global --add safe.directory '*'`,
   ];
+  if (services.length > 0) steps.push(buildVaultPullCommand(services));
   if (priorLog) {
     const b64 = Buffer.from(priorLog, "utf8").toString("base64");
     steps.push(`mkdir -p /home/user/.hub`);
@@ -69,6 +102,7 @@ function buildSetup(remoteUrl: string, priorLog: string | null): string[] {
   steps.push(`touch ${READY_PATH}`);
   return steps;
 }
+
 
 type ConvexSession = {
   _id: Id<"sessions">;
@@ -145,7 +179,7 @@ export async function startSpawn(slug: string): Promise<Session> {
     timeoutMs: SANDBOX_TIMEOUT_MS,
     networkAllowOut: NETWORK_ALLOW,
     networkDenyOut: NETWORK_DENY,
-    setup: buildSetup(remoteUrl, priorLog),
+    setup: buildSetup(remoteUrl, priorLog, getServicesForSlug(slug)),
   });
 
   const thread = await c.threads.create({
