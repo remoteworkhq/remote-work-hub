@@ -4,7 +4,8 @@ import "server-only";
 // Cross-contamination defense: every server-side write/push derives the repo
 // from this table, NOT from anything the client sends.
 export const PROJECT_REPOS: Record<string, string> = {
-  "test-project": "remoteworkhq/sandbox-test",
+  "test-project": "daniels-project-space/sandbox-test",
+  "music-house": "daniels-project-space/music-house",
 };
 
 export type ProjectMeta = {
@@ -22,7 +23,14 @@ export const PROJECTS: ProjectMeta[] = [
     name: "Sandbox Test",
     description:
       "Throwaway repo for proving the Claude Code agent flow end-to-end.",
-    repo: "remoteworkhq/sandbox-test",
+    repo: "daniels-project-space/sandbox-test",
+  },
+  {
+    slug: "music-house",
+    name: "Music House",
+    description:
+      "AI music label. Suno + Mureka generation, organized catalog with timestamped lyrics, hearts, playlists, distribution-ready.",
+    repo: "daniels-project-space/music-house",
   },
 ];
 
