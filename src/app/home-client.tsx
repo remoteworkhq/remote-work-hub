@@ -78,6 +78,16 @@ export default function HomeClient({ projects }: { projects: ProjectMeta[] }) {
           </div>
 
           <div className="hidden md:flex items-center gap-6 text-right">
+            <a
+              href="https://project-hub-olive-pi.vercel.app"
+              target="_blank"
+              rel="noreferrer"
+              className="font-mono text-[10px] uppercase tracking-[0.28em] text-paper-faint hover:text-amber transition-colors"
+              aria-label="Open Project Hub"
+            >
+              ← Project Hub
+            </a>
+            <div className="h-12 w-px bg-rule-soft" />
             <div>
               <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-paper-faint">
                 Projects
