@@ -4,7 +4,6 @@ import "server-only";
 // Cross-contamination defense: every server-side write/push derives the repo
 // from this table, NOT from anything the client sends.
 export const PROJECT_REPOS: Record<string, string> = {
-  "test-project": "daniels-project-space/sandbox-test",
   "music-house": "daniels-project-space/music-house",
 };
 
@@ -22,14 +21,6 @@ export type ProjectMeta = {
 // Public-safe project metadata (no secrets, no token URLs). Safe to ship to
 // the browser via server components.
 export const PROJECTS: ProjectMeta[] = [
-  {
-    slug: "test-project",
-    name: "Sandbox Test",
-    description:
-      "Throwaway repo for proving the Claude Code agent flow end-to-end.",
-    repo: "daniels-project-space/sandbox-test",
-    services: ["anthropic"],
-  },
   {
     slug: "music-house",
     name: "Music House",
