@@ -5,6 +5,7 @@ import "server-only";
 // from this table, NOT from anything the client sends.
 export const PROJECT_REPOS: Record<string, string> = {
   "music-house": "daniels-project-space/music-house",
+  "rental-manager-v2": "daniels-project-space/rental-manager-v2",
 };
 
 export type ProjectMeta = {
@@ -28,6 +29,14 @@ export const PROJECTS: ProjectMeta[] = [
       "AI music label. Suno + Mureka generation, organized catalog with timestamped lyrics, hearts, playlists, distribution-ready.",
     repo: "daniels-project-space/music-house",
     services: ["convex", "cloudflare", "suno", "mureka", "kits", "anthropic", "replicate", "trigger"],
+  },
+  {
+    slug: "rental-manager-v2",
+    name: "Rental Manager v2",
+    description:
+      "Hygglo rental bot + dashboard. READ-ONLY mode by default; outbound messaging gated behind ALLOW_HYGGLO_SEND flag.",
+    repo: "daniels-project-space/rental-manager-v2",
+    services: ["convex", "vercel", "cloudflare", "r2-rental-manager-v2", "trigger", "browserbase", "xai", "anthropic", "hygglo-leo", "hygglo-dbcinema", "telegram-rental-v2", "rental-manager-v2"],
   },
 ];
 
