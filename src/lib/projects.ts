@@ -6,6 +6,7 @@ import "server-only";
 export const PROJECT_REPOS: Record<string, string> = {
   "music-house": "daniels-project-space/music-house",
   "rental-manager-v2": "daniels-project-space/rental-manager-v2",
+  "youtube-studio-ai": "daniels-project-space/youtube-studio-ai",
 };
 
 export type ProjectMeta = {
@@ -37,6 +38,14 @@ export const PROJECTS: ProjectMeta[] = [
       "Hygglo rental bot + dashboard. READ-ONLY mode by default; outbound messaging gated behind ALLOW_HYGGLO_SEND flag.",
     repo: "daniels-project-space/rental-manager-v2",
     services: ["convex", "vercel", "cloudflare", "r2-rental-manager-v2", "trigger", "browserbase", "xai", "anthropic", "hygglo-leo", "hygglo-dbcinema", "telegram-rental-v2", "rental-manager-v2"],
+  },
+  {
+    slug: "youtube-studio-ai",
+    name: "YouTube Studio AI",
+    description:
+      "Modular AI YouTube video factory — block-based pipeline (Convex + Mastra + Trigger + R2 + Higgsfield).",
+    repo: "daniels-project-space/youtube-studio-ai",
+    services: ["convex", "cloudflare", "trigger", "higgsfield", "suno", "mureka", "youtube", "telegram", "replicate"],
   },
 ];
 
